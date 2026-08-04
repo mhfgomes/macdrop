@@ -41,6 +41,16 @@ final class WallpaperWindow: NSWindow {
         }
     }
 
+    func invalidate() {
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+            self.occlusionObserver = nil
+        }
+        visibilityChanged = nil
+        videoView.invalidate()
+        orderOut(nil)
+    }
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 }

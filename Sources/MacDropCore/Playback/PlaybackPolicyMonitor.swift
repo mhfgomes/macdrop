@@ -24,6 +24,17 @@ public final class PlaybackPolicyMonitor: ObservableObject {
         refreshThermalState()
     }
 
+    public func shutdown() {
+        let center = NotificationCenter.default
+        let workspace = NSWorkspace.shared.notificationCenter
+        for observer in observers {
+            center.removeObserver(observer)
+            workspace.removeObserver(observer)
+        }
+        observers.removeAll()
+        controller = nil
+    }
+
     private func installObservers() {
         let center = NotificationCenter.default
         observers.append(center.addObserver(

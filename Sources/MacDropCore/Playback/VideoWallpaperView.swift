@@ -71,6 +71,13 @@ final class VideoWallpaperView: NSView {
         rebuildPlayer()
     }
 
+    func invalidate() {
+        playbackEnded = nil
+        clear()
+        queuePlayer = nil
+        playerLooper = nil
+    }
+
     private func rebuildPlayer() {
         if let endTimeObserver, let queuePlayer {
             queuePlayer.removeTimeObserver(endTimeObserver)
