@@ -36,6 +36,7 @@ final class AppModel: ObservableObject {
     private var policyMonitor: PlaybackPolicyMonitor?
     private var pendingOptimizationIDs: [UUID] = []
     private var activeOptimizationTasks: [UUID: Task<Void, Never>] = [:]
+    private var activeImportTask: Task<Void, Never>?
     private var optimizationStartedAt: [UUID: Date] = [:]
     private var userCancelledOptimizationIDs: Set<UUID> = []
     private let maxConcurrentOptimizations = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
@@ -95,23 +96,42 @@ final class AppModel: ObservableObject {
 
     func importVideos(_ urls: [URL]) async {
         guard !urls.isEmpty else { return }
+        guard !isDestructiveOperationBusy else {
+            presentedError = "MacDrop is busy with another operation. Try importing again in a moment."
+            return
+        }
+        guard activeImportTask == nil, !isImporting else {
+            presentedError = "An import is already in progress."
+            return
+        }
         isImporting = true
         importResults = []
-        for url in urls {
-            let results = await library.importVideos(from: [url])
-            importResults.append(contentsOf: results)
-            let importedIDs = results.compactMap(\.wallpaperID)
-            if !importedIDs.isEmpty {
-                reconcileDisplaysAndAssignments()
-                enqueueOptimizations(importedIDs)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.isImporting = false
+                self.activeImportTask = nil
+            }
+            for url in urls {
+                guard !Task.isCancelled else { return }
+                let results = await self.library.importVideos(from: [url])
+                self.importResults.append(contentsOf: results)
+                let importedIDs = results.compactMap(\.wallpaperID)
+                if !importedIDs.isEmpty {
+                    self.reconcileDisplaysAndAssignments()
+                    self.enqueueOptimizations(importedIDs)
+                }
+            }
+            let failures = self.importResults.compactMap { result in result.error.map { "\(result.sourceName): \($0)" } }
+            if !failures.isEmpty {
+                self.presentedError = (["Some videos could not be imported:"] + failures).joined(separator: "
+")
             }
         }
-        isImporting = false
-        let failures = importResults.compactMap { result in result.error.map { "\(result.sourceName): \($0)" } }
-        if !failures.isEmpty {
-            presentedError = (["Some videos could not be imported:"] + failures).joined(separator: "\n")
-        }
+        activeImportTask = task
+        await task.value
     }
+
 
     func retryOptimization(_ wallpaper: Wallpaper) {
         userCancelledOptimizationIDs.remove(wallpaper.id)
