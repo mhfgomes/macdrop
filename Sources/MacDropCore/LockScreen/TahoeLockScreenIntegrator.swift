@@ -72,6 +72,10 @@ private struct OperationJournal: Codable {
     var failureDescription: String?
 }
 
+private enum SlotBackupError: Error {
+    case assetIDMismatch
+}
+
 public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked Sendable {
     public static let categoryID = "4D414344-524F-5000-8000-000000000001"
     public static let subcategoryID = "4D414344-524F-5000-8000-000000000002"
@@ -150,9 +154,14 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         let rollbackBackup = try createBackup(slot: slot.url, assetID: slot.assetID)
         let persistentBackup: URL
         if let existingState, existingState.active {
-            persistentBackup = URL(fileURLWithPath: existingState.backupDirectory, isDirectory: true)
-            try verifyBackup(at: persistentBackup)
-            try ensureSlotBackup(at: persistentBackup, slot: slot.url, assetID: slot.assetID)
+            let existingBackup = URL(fileURLWithPath: existingState.backupDirectory, isDirectory: true)
+            try verifyBackup(at: existingBackup)
+            do {
+                try ensureSlotBackup(at: existingBackup, slot: slot.url, assetID: slot.assetID)
+                persistentBackup = existingBackup
+            } catch SlotBackupError.assetIDMismatch {
+                persistentBackup = rollbackBackup
+            }
         } else {
             persistentBackup = rollbackBackup
         }
@@ -603,6 +612,15 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         let destination = directory.appendingPathComponent(Self.slotBackupFilename)
         if fileManager.fileExists(atPath: destination.path) {
             try verifyBackup(at: directory)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let metadata = try decoder.decode(
+                BackupMetadata.self,
+                from: Data(contentsOf: directory.appendingPathComponent("backup.json"))
+            )
+            guard metadata.borrowedAssetID == assetID else {
+                throw SlotBackupError.assetIDMismatch
+            }
             return
         }
         try atomicCopy(from: slot, to: destination)
