@@ -19,14 +19,18 @@ public final class LaunchAtLoginController: LaunchAtLoginControlling {
                 throw LaunchAtLoginError.requiresApproval
             case .notRegistered:
                 try SMAppService.mainApp.register()
-            default:
-                try SMAppService.mainApp.register()
+            case .notFound:
+                throw LaunchAtLoginError.unavailable
+            @unknown default:
+                throw LaunchAtLoginError.unavailable
             }
         } else {
             switch status {
             case .enabled, .requiresApproval:
                 try SMAppService.mainApp.unregister()
-            default:
+            case .notRegistered, .notFound:
+                return
+            @unknown default:
                 return
             }
         }
@@ -35,11 +39,14 @@ public final class LaunchAtLoginController: LaunchAtLoginControlling {
 
 public enum LaunchAtLoginError: LocalizedError {
     case requiresApproval
+    case unavailable
 
     public var errorDescription: String? {
         switch self {
         case .requiresApproval:
-            "MacDrop is waiting for Login Items approval in System Settings."
+            "Approve MacDrop in System Settings → General → Login Items."
+        case .unavailable:
+            "Launch at Login is unavailable for this copy of MacDrop."
         }
     }
 }
