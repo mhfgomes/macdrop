@@ -16,6 +16,8 @@ final class VideoWallpaperView: NSView {
     private var loops = true
     private var batteryMode = false
     private var didSignalPlaybackEnd = false
+    private var rebuildRetryCount = 0
+    private let maximumRebuildRetries = 3
     var playbackEnded: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -40,6 +42,9 @@ final class VideoWallpaperView: NSView {
         guard currentURL != url || desiredContentMode != contentMode || self.loops != loops else {
             resume()
             return
+        }
+        if currentURL != url {
+            rebuildRetryCount = 0
         }
         currentURL = url
         desiredContentMode = contentMode
@@ -68,24 +73,12 @@ final class VideoWallpaperView: NSView {
 
     func clear() {
         currentURL = nil
+        rebuildRetryCount = 0
         rebuildPlayer()
     }
 
     private func rebuildPlayer() {
-        if let endTimeObserver, let queuePlayer {
-            queuePlayer.removeTimeObserver(endTimeObserver)
-            self.endTimeObserver = nil
-        }
-        looperObservation?.invalidate()
-        itemObservation?.invalidate()
-        if let endObserver {
-            NotificationCenter.default.removeObserver(endObserver)
-            self.endObserver = nil
-        }
-        playerLooper?.disableLooping()
-        queuePlayer?.pause()
-        queuePlayer?.removeAllItems()
-        playerLayer.player = nil
+        tearDownPlayer()
         didSignalPlaybackEnd = false
 
         guard let currentURL else { return }
@@ -106,7 +99,7 @@ final class VideoWallpaperView: NSView {
             playerLooper = looper
             looperObservation = looper.observe(\.status, options: [.new]) { [weak self] looper, _ in
                 guard looper.status == .failed else { return }
-                Task { @MainActor [weak self] in self?.rebuildPlayer() }
+                Task { @MainActor [weak self] in self?.handlePermanentFailure() }
             }
         } else {
             playerLooper = nil
@@ -130,9 +123,39 @@ final class VideoWallpaperView: NSView {
         }
         itemObservation = player.observe(\.currentItem?.status, options: [.new]) { [weak self] player, _ in
             guard player.currentItem?.status == .failed else { return }
-            Task { @MainActor [weak self] in self?.rebuildPlayer() }
+            Task { @MainActor [weak self] in self?.handlePermanentFailure() }
         }
         player.play()
+    }
+
+    private func tearDownPlayer() {
+        if let endTimeObserver, let queuePlayer {
+            queuePlayer.removeTimeObserver(endTimeObserver)
+            self.endTimeObserver = nil
+        }
+        looperObservation?.invalidate()
+        itemObservation?.invalidate()
+        if let endObserver {
+            NotificationCenter.default.removeObserver(endObserver)
+            self.endObserver = nil
+        }
+        playerLooper?.disableLooping()
+        queuePlayer?.pause()
+        queuePlayer?.removeAllItems()
+        playerLayer.player = nil
+        playerLooper = nil
+        queuePlayer = nil
+    }
+
+    private func handlePermanentFailure() {
+        guard currentURL != nil else { return }
+        guard rebuildRetryCount < maximumRebuildRetries else {
+            currentURL = nil
+            tearDownPlayer()
+            return
+        }
+        rebuildRetryCount += 1
+        rebuildPlayer()
     }
 
     private func signalPlaybackEnded() {
