@@ -7,6 +7,7 @@ public enum LockScreenIntegrationError: LocalizedError, Equatable {
     case incompatibleSchema(String)
     case backupFailed(String)
     case mutationFailed(String)
+    case rollbackFailed(String)
     case verificationFailed(String)
     case noBackup
 
@@ -17,6 +18,7 @@ public enum LockScreenIntegrationError: LocalizedError, Equatable {
         case .incompatibleSchema(let reason): "This macOS wallpaper format is not supported: \(reason)"
         case .backupFailed(let reason): "MacDrop could not back up the wallpaper configuration: \(reason)"
         case .mutationFailed(let reason): "MacDrop could not update the lock-screen wallpaper: \(reason)"
+        case .rollbackFailed(let reason): "MacDrop could not recover the lock-screen wallpaper transaction: \(reason)"
         case .verificationFailed(let reason): "The wallpaper update could not be verified: \(reason)"
         case .noBackup: "No MacDrop lock-screen backup is available to restore."
         }
@@ -40,6 +42,34 @@ private struct BackupMetadata: Codable {
     let indexSHA256: String
     let borrowedAssetID: String?
     let slotSHA256: String?
+    let stateSHA256: String?
+}
+
+private struct OperationJournal: Codable {
+    enum Operation: String, Codable {
+        case install
+        case restore
+    }
+
+    enum Status: String, Codable {
+        case inProgress
+        case completed
+        case rolledBack
+        case failed
+    }
+
+    let operation: Operation
+    let entriesPath: String
+    let indexPath: String
+    let statePath: String
+    let targetAssetID: String
+    let targetSlotPath: String?
+    let backupDirectory: String
+    let previousStateExisted: Bool
+    let startedAt: Date
+    var completedSteps: [String]
+    var status: Status
+    var failureDescription: String?
 }
 
 public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked Sendable {
@@ -58,9 +88,11 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     private var entriesURL: URL { aerialsRoot.appendingPathComponent("manifest/entries.json") }
     private var indexURL: URL { home.appendingPathComponent("Library/Application Support/com.apple.wallpaper/Store/Index.plist") }
     private var stateURL: URL { appPaths.root.appendingPathComponent("lock-screen-state.json") }
+    private var journalURL: URL { appPaths.root.appendingPathComponent("lock-screen-operation-journal.json") }
     private var installedVideoURL: URL { videosDirectory.appendingPathComponent("\(Self.assetID).mov") }
     private var installedThumbnailURL: URL { thumbnailsDirectory.appendingPathComponent("\(Self.assetID).jpg") }
     private static let slotBackupFilename = "aerial-slot.original.mov"
+    private static let stateBackupFilename = "lock-screen-state.original.json"
 
     public init(
         appPaths: AppPaths = AppPaths(),
@@ -75,6 +107,8 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     }
 
     public func health() throws -> LockScreenHealth {
+        try appPaths.prepare()
+        try recoverIncompleteOperation()
         guard let state = try loadState(), state.active else {
             return LockScreenHealth(state: .disabled, message: "Lock-screen integration is off.")
         }
@@ -108,6 +142,7 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
             throw LockScreenIntegrationError.unsupportedOS
         }
         try appPaths.prepare()
+        try recoverIncompleteOperation()
         let entries = try loadEntries()
         let index = try loadIndex()
         let existingState = try loadState()
@@ -122,14 +157,26 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
             persistentBackup = rollbackBackup
         }
 
+        var journal = makeJournal(
+            operation: .install,
+            assetID: slot.assetID,
+            slotURL: slot.url,
+            backup: rollbackBackup
+        )
+        try writeJournal(journal)
+
         do {
             try atomicCopy(from: assetURL, to: slot.url)
+            try recordStep("slotReplaced", in: &journal)
 
             let updatedEntries = removingMacDropAsset(from: entries)
             let updatedIndex = settingIdleChoice(in: index, assetID: slot.assetID)
             try atomicWriteJSON(updatedEntries, to: entriesURL)
+            try recordStep("entriesWritten", in: &journal)
             try atomicWritePlist(updatedIndex, to: indexURL)
+            try recordStep("indexWritten", in: &journal)
             try agentRestarter()
+            try recordStep("wallpaperAgentRestarted", in: &journal)
 
             let installedHash = try sha256(of: slot.url)
             guard indexSelectsAsset(try loadIndex(), assetID: slot.assetID),
@@ -148,16 +195,23 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
                 installedVideoSHA256: installedHash
             )
             try atomicWriteEncodable(state, to: stateURL)
+            try recordStep("stateWritten", in: &journal)
+            journal.status = .completed
+            try writeJournal(journal)
         } catch {
-            try? restoreExactBackup(from: rollbackBackup)
-            try? restoreSlotBackup(from: rollbackBackup, to: slot.url)
-            try? agentRestarter()
+            do {
+                try rollbackOperation(journal, cause: error.localizedDescription)
+            } catch let rollbackError as LockScreenIntegrationError {
+                throw rollbackError
+            }
             if let integrationError = error as? LockScreenIntegrationError { throw integrationError }
             throw LockScreenIntegrationError.mutationFailed(error.localizedDescription)
         }
     }
 
     public func restore() throws {
+        try appPaths.prepare()
+        try recoverIncompleteOperation()
         guard let state = try loadState() else { throw LockScreenIntegrationError.noBackup }
         let backupDirectory = URL(fileURLWithPath: state.backupDirectory, isDirectory: true)
         guard fileManager.fileExists(atPath: backupDirectory.path) else { throw LockScreenIntegrationError.noBackup }
@@ -166,29 +220,56 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         let currentEntries = try loadEntries()
         let currentIndex = try loadIndex()
         let backupIndex = try loadPlistDictionary(backupDirectory.appendingPathComponent("Index.plist"))
+        let slotURL = state.borrowedSlotPath.map { URL(fileURLWithPath: $0) }
+        let rollbackBackup = try createBackup(slot: slotURL, assetID: state.borrowedAssetID)
+        var journal = makeJournal(
+            operation: .restore,
+            assetID: state.assetID,
+            slotURL: slotURL,
+            backup: rollbackBackup
+        )
+        try writeJournal(journal)
 
-        let cleanedEntries = removingMacDropAsset(from: currentEntries)
-        let restoredIndex = restoreOwnedIdleChoices(current: currentIndex, backup: backupIndex, assetID: state.assetID)
-        try atomicWriteJSON(cleanedEntries, to: entriesURL)
-        try atomicWritePlist(restoredIndex, to: indexURL)
-        if let slotPath = state.borrowedSlotPath {
-            try restoreSlotBackup(from: backupDirectory, to: URL(fileURLWithPath: slotPath))
-        }
-        try? fileManager.removeItem(at: installedVideoURL)
-        try? fileManager.removeItem(at: installedThumbnailURL)
-        try agentRestarter()
+        do {
+            let cleanedEntries = removingMacDropAsset(from: currentEntries)
+            let restoredIndex = restoreOwnedIdleChoices(current: currentIndex, backup: backupIndex, assetID: state.assetID)
+            try atomicWriteJSON(cleanedEntries, to: entriesURL)
+            try recordStep("entriesWritten", in: &journal)
+            try atomicWritePlist(restoredIndex, to: indexURL)
+            try recordStep("indexWritten", in: &journal)
+            if let slotURL {
+                try restoreSlotBackup(from: backupDirectory, to: slotURL)
+                try recordStep("slotRestored", in: &journal)
+            }
+            try? fileManager.removeItem(at: installedVideoURL)
+            try? fileManager.removeItem(at: installedThumbnailURL)
+            try agentRestarter()
+            try recordStep("wallpaperAgentRestarted", in: &journal)
 
-        let stillOwnsSelection: Bool
-        if state.borrowedAssetID == nil {
-            stillOwnsSelection = indexSelectsAsset(try loadIndex(), assetID: state.assetID)
-        } else {
-            stillOwnsSelection = false
+            let stillOwnsSelection: Bool
+            if state.borrowedAssetID == nil {
+                stillOwnsSelection = indexSelectsAsset(try loadIndex(), assetID: state.assetID)
+            } else {
+                stillOwnsSelection = false
+            }
+            guard !entriesContainsMacDropAsset(try loadEntries()), !stillOwnsSelection else {
+                throw LockScreenIntegrationError.verificationFailed("MacDrop's manifest entry could not be removed.")
+            }
+            if fileManager.fileExists(atPath: stateURL.path) {
+                try fileManager.removeItem(at: stateURL)
+            }
+            try recordStep("stateRemoved", in: &journal)
+            journal.status = .completed
+            try writeJournal(journal)
+        } catch {
+            do {
+                try rollbackOperation(journal, cause: error.localizedDescription)
+            } catch let rollbackError as LockScreenIntegrationError {
+                throw rollbackError
+            }
+            if let integrationError = error as? LockScreenIntegrationError { throw integrationError }
+            throw LockScreenIntegrationError.mutationFailed(error.localizedDescription)
         }
-        guard !entriesContainsMacDropAsset(try loadEntries()), !stillOwnsSelection else {
-            try? restoreExactBackup(from: backupDirectory)
-            throw LockScreenIntegrationError.verificationFailed("MacDrop's manifest entry could not be removed.")
-        }
-        try? fileManager.removeItem(at: stateURL)
     }
 
     public func backupFolderURL() -> URL { appPaths.backups }
@@ -434,27 +515,42 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         return slot
     }
 
-    private func createBackup(slot: URL, assetID: String) throws -> URL {
+    private func createBackup(slot: URL?, assetID: String?) throws -> URL {
         do {
             let formatter = DateFormatter()
             formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-            let directory = appPaths.backups.appendingPathComponent(formatter.string(from: .now), isDirectory: true)
+            let backupName = "\(formatter.string(from: .now))-\(UUID().uuidString)"
+            let directory = appPaths.backups.appendingPathComponent(backupName, isDirectory: true)
             try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             let entriesData = try Data(contentsOf: entriesURL)
             let indexData = try Data(contentsOf: indexURL)
             try entriesData.write(to: directory.appendingPathComponent("entries.json"), options: .atomic)
             try indexData.write(to: directory.appendingPathComponent("Index.plist"), options: .atomic)
-            try Data(contentsOf: slot).write(
-                to: directory.appendingPathComponent(Self.slotBackupFilename),
-                options: .atomic
-            )
+            if let slot {
+                try Data(contentsOf: slot).write(
+                    to: directory.appendingPathComponent(Self.slotBackupFilename),
+                    options: .atomic
+                )
+            }
+            let stateData: Data?
+            if fileManager.fileExists(atPath: stateURL.path) {
+                let data = try Data(contentsOf: stateURL)
+                try data.write(
+                    to: directory.appendingPathComponent(Self.stateBackupFilename),
+                    options: .atomic
+                )
+                stateData = data
+            } else {
+                stateData = nil
+            }
             let metadata = BackupMetadata(
                 createdAt: .now,
                 operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
                 entriesSHA256: SHA256.hash(data: entriesData).hexString,
                 indexSHA256: SHA256.hash(data: indexData).hexString,
                 borrowedAssetID: assetID,
-                slotSHA256: try sha256(of: slot)
+                slotSHA256: try slot.map { try sha256(of: $0) },
+                stateSHA256: stateData.map { SHA256.hash(data: $0).hexString }
             )
             try atomicWriteEncodable(metadata, to: directory.appendingPathComponent("backup.json"))
             return directory
@@ -482,6 +578,13 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
                 guard fileManager.fileExists(atPath: slotBackup.path),
                       try sha256(of: slotBackup) == slotHash else {
                     throw LockScreenIntegrationError.backupFailed("The borrowed Aerial backup checksum does not match.")
+                }
+            }
+            if let stateHash = metadata.stateSHA256 {
+                let stateBackup = directory.appendingPathComponent(Self.stateBackupFilename)
+                guard fileManager.fileExists(atPath: stateBackup.path),
+                      try sha256(of: stateBackup) == stateHash else {
+                    throw LockScreenIntegrationError.backupFailed("The integration state backup checksum does not match.")
                 }
             }
         } catch let error as LockScreenIntegrationError {
@@ -513,7 +616,8 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
             entriesSHA256: old.entriesSHA256,
             indexSHA256: old.indexSHA256,
             borrowedAssetID: assetID,
-            slotSHA256: try sha256(of: destination)
+            slotSHA256: try sha256(of: destination),
+            stateSHA256: old.stateSHA256
         )
         try atomicWriteEncodable(updated, to: metadataURL)
         try verifyBackup(at: directory)
@@ -523,6 +627,131 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         let backup = directory.appendingPathComponent(Self.slotBackupFilename)
         guard fileManager.fileExists(atPath: backup.path) else { return }
         try atomicCopy(from: backup, to: slot)
+    }
+
+    private func makeJournal(
+        operation: OperationJournal.Operation,
+        assetID: String,
+        slotURL: URL?,
+        backup: URL
+    ) -> OperationJournal {
+        OperationJournal(
+            operation: operation,
+            entriesPath: entriesURL.path,
+            indexPath: indexURL.path,
+            statePath: stateURL.path,
+            targetAssetID: assetID,
+            targetSlotPath: slotURL?.path,
+            backupDirectory: backup.path,
+            previousStateExisted: fileManager.fileExists(atPath: stateURL.path),
+            startedAt: .now,
+            completedSteps: [],
+            status: .inProgress,
+            failureDescription: nil
+        )
+    }
+
+    private func writeJournal(_ journal: OperationJournal) throws {
+        try atomicWriteEncodable(journal, to: journalURL)
+        let handle = try FileHandle(forWritingTo: journalURL)
+        try handle.synchronize()
+        try handle.close()
+    }
+
+    private func recordStep(_ step: String, in journal: inout OperationJournal) throws {
+        journal.completedSteps.append(step)
+        try writeJournal(journal)
+    }
+
+    private func loadJournal() throws -> OperationJournal? {
+        guard fileManager.fileExists(atPath: journalURL.path) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(OperationJournal.self, from: Data(contentsOf: journalURL))
+    }
+
+    private func recoverIncompleteOperation() throws {
+        guard let journal = try loadJournal(),
+              journal.status == .inProgress || journal.status == .failed else { return }
+        try rollbackOperation(journal, cause: "The \(journal.operation.rawValue) operation was interrupted.")
+    }
+
+    private func rollbackOperation(_ original: OperationJournal, cause: String) throws {
+        var journal = original
+        let backup = URL(fileURLWithPath: journal.backupDirectory, isDirectory: true)
+        do {
+            try verifyBackup(at: backup)
+        } catch {
+            let reason = "\(cause) Rollback backup verification failed: \(error.localizedDescription)"
+            journal.status = .failed
+            journal.failureDescription = reason
+            do {
+                try writeJournal(journal)
+            } catch {
+                throw LockScreenIntegrationError.rollbackFailed(
+                    "\(reason) The journal failure could not be recorded: \(error.localizedDescription)"
+                )
+            }
+            throw LockScreenIntegrationError.rollbackFailed(reason)
+        }
+
+        var failures: [String] = []
+        do {
+            try restoreExactBackup(from: backup)
+            journal.completedSteps.append("rollbackEntriesAndIndex")
+        } catch {
+            failures.append("wallpaper data: \(error.localizedDescription)")
+        }
+        if let slotPath = journal.targetSlotPath {
+            do {
+                try restoreSlotBackup(from: backup, to: URL(fileURLWithPath: slotPath))
+                journal.completedSteps.append("rollbackSlot")
+            } catch {
+                failures.append("Aerial slot: \(error.localizedDescription)")
+            }
+        }
+        do {
+            let stateBackup = backup.appendingPathComponent(Self.stateBackupFilename)
+            if journal.previousStateExisted {
+                try atomicCopy(from: stateBackup, to: URL(fileURLWithPath: journal.statePath))
+            } else if fileManager.fileExists(atPath: journal.statePath) {
+                try fileManager.removeItem(atPath: journal.statePath)
+            }
+            journal.completedSteps.append("rollbackState")
+        } catch {
+            failures.append("integration state: \(error.localizedDescription)")
+        }
+        do {
+            try agentRestarter()
+            journal.completedSteps.append("rollbackWallpaperAgentRestart")
+        } catch {
+            failures.append("WallpaperAgent restart: \(error.localizedDescription)")
+        }
+
+        if failures.isEmpty {
+            journal.status = .rolledBack
+            journal.failureDescription = cause
+            do {
+                try writeJournal(journal)
+            } catch {
+                throw LockScreenIntegrationError.rollbackFailed(
+                    "\(cause) System files were restored, but the rollback journal could not be finalized: \(error.localizedDescription)"
+                )
+            }
+            return
+        }
+
+        let reason = "\(cause) Rollback also failed: \(failures.joined(separator: "; "))"
+        journal.status = .failed
+        journal.failureDescription = reason
+        do {
+            try writeJournal(journal)
+        } catch {
+            throw LockScreenIntegrationError.rollbackFailed(
+                "\(reason) The rollback failure could not be recorded: \(error.localizedDescription)"
+            )
+        }
+        throw LockScreenIntegrationError.rollbackFailed(reason)
     }
 
     private func sha256(of url: URL) throws -> String {
