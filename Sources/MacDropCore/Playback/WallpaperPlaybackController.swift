@@ -22,7 +22,13 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
     }
 
     public func reconcileDisplays() {
-        let screensByID = Dictionary(uniqueKeysWithValues: NSScreen.screens.map { (Self.identifier(for: $0), $0) })
+        var screensByID: [String: NSScreen] = [:]
+        for screen in NSScreen.screens {
+            let id = Self.identifier(for: screen)
+            if screensByID[id] == nil {
+                screensByID[id] = screen
+            }
+        }
 
         for id in Array(windows.keys) where screensByID[id] == nil {
             pendingOcclusionTasks[id]?.cancel()
@@ -138,8 +144,10 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
     }
 
     public static func identifier(for screen: NSScreen) -> String {
-        let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-        let displayID = CGDirectDisplayID(number?.uint32Value ?? 0)
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return "display-unknown-\(ObjectIdentifier(screen).hashValue)"
+        }
+        let displayID = CGDirectDisplayID(number.uint32Value)
         return CGDisplayCreateUUIDFromDisplayID(displayID).map { CFUUIDCreateString(nil, $0.takeRetainedValue()) as String }
             ?? "display-\(displayID)"
     }
