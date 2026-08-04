@@ -78,16 +78,16 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         guard let state = try loadState(), state.active else {
             return LockScreenHealth(state: .disabled, message: "Lock-screen integration is off.")
         }
-        if state.borrowedAssetID == nil,
-           (!fileManager.fileExists(atPath: installedVideoURL.path)
-            || !fileManager.fileExists(atPath: installedThumbnailURL.path)) {
-            return LockScreenHealth(state: .degraded, message: "The legacy MacDrop registration needs to be reapplied for Tahoe's Aerial renderer.", lastBackup: state.installedAt)
-        }
         do {
+            let slotURL = try borrowedSlotURL(from: state)
+            if state.borrowedAssetID == nil,
+               (!fileManager.fileExists(atPath: installedVideoURL.path)
+                || !fileManager.fileExists(atPath: installedThumbnailURL.path)) {
+                return LockScreenHealth(state: .degraded, message: "The legacy MacDrop registration needs to be reapplied for Tahoe's Aerial renderer.", lastBackup: state.installedAt)
+            }
             if let borrowedAssetID = state.borrowedAssetID,
-               let borrowedSlotPath = state.borrowedSlotPath,
+               let slotURL,
                let installedHash = state.installedVideoSHA256 {
-                let slotURL = URL(fileURLWithPath: borrowedSlotPath)
                 guard fileManager.fileExists(atPath: slotURL.path),
                       try sha256(of: slotURL) == installedHash else {
                     return LockScreenHealth(state: .degraded, message: "The borrowed Apple Aerial slot no longer contains MacDrop's video.", lastBackup: state.installedAt)
@@ -159,6 +159,7 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
 
     public func restore() throws {
         guard let state = try loadState() else { throw LockScreenIntegrationError.noBackup }
+        let borrowedSlotURL = try borrowedSlotURL(from: state)
         let backupDirectory = URL(fileURLWithPath: state.backupDirectory, isDirectory: true)
         guard fileManager.fileExists(atPath: backupDirectory.path) else { throw LockScreenIntegrationError.noBackup }
         try verifyBackup(at: backupDirectory)
@@ -171,8 +172,8 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         let restoredIndex = restoreOwnedIdleChoices(current: currentIndex, backup: backupIndex, assetID: state.assetID)
         try atomicWriteJSON(cleanedEntries, to: entriesURL)
         try atomicWritePlist(restoredIndex, to: indexURL)
-        if let slotPath = state.borrowedSlotPath {
-            try restoreSlotBackup(from: backupDirectory, to: URL(fileURLWithPath: slotPath))
+        if let borrowedSlotURL {
+            try restoreSlotBackup(from: backupDirectory, to: borrowedSlotURL)
         }
         try? fileManager.removeItem(at: installedVideoURL)
         try? fileManager.removeItem(at: installedThumbnailURL)
@@ -411,17 +412,19 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
 
     private func findBorrowedAerialSlot(in entries: [String: Any], preferredID: String?) throws -> BorrowedAerialSlot {
         let assets = entries["assets"] as? [[String: Any]] ?? []
-        let candidates = assets.compactMap { asset -> BorrowedAerialSlot? in
-            guard let id = asset["id"] as? String,
-                  id != Self.assetID,
+        var candidates: [BorrowedAerialSlot] = []
+        for asset in assets {
+            guard let id = asset["id"] as? String else { continue }
+            guard id != Self.assetID,
                   !((asset["categories"] as? [String])?.contains(Self.categoryID) == true),
                   let remote = asset["url-4K-SDR-240FPS"] as? String,
                   let scheme = URL(string: remote)?.scheme?.lowercased(),
-                  scheme == "https" || scheme == "http" else { return nil }
-            let local = videosDirectory.appendingPathComponent("\(id).mov")
-            guard fileManager.fileExists(atPath: local.path) else { return nil }
-            return BorrowedAerialSlot(assetID: id, url: local)
-        }.sorted { $0.assetID < $1.assetID }
+                  scheme == "https" || scheme == "http" else { continue }
+            let local = try slotURL(forAssetID: id)
+            guard fileManager.fileExists(atPath: local.path) else { continue }
+            candidates.append(BorrowedAerialSlot(assetID: id, url: local))
+        }
+        candidates.sort { $0.assetID < $1.assetID }
 
         if let preferredID, let preferred = candidates.first(where: { $0.assetID == preferredID }) {
             return preferred
@@ -432,6 +435,44 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
             )
         }
         return slot
+    }
+
+    private func slotURL(forAssetID id: String) throws -> URL {
+        guard !id.contains("/"),
+              !id.contains("\\"),
+              !id.contains(".."),
+              let uuid = UUID(uuidString: id),
+              uuid.uuidString.caseInsensitiveCompare(id) == .orderedSame else {
+            throw LockScreenIntegrationError.incompatibleSchema(
+                "Aerial asset ID '\(id)' is not a canonical UUID."
+            )
+        }
+        let slotURL = videosDirectory.appendingPathComponent("\(id).mov")
+        try ensureSlotIsInVideosDirectory(slotURL, description: "Aerial asset \(id)")
+        return slotURL
+    }
+
+    private func borrowedSlotURL(from state: IntegrationState) throws -> URL? {
+        if let borrowedAssetID = state.borrowedAssetID {
+            return try slotURL(forAssetID: borrowedAssetID)
+        }
+        guard let borrowedSlotPath = state.borrowedSlotPath else { return nil }
+        let slotURL = URL(fileURLWithPath: borrowedSlotPath).standardizedFileURL.resolvingSymlinksInPath()
+        try ensureSlotIsInVideosDirectory(slotURL, description: "Saved borrowed Aerial slot")
+        return slotURL
+    }
+
+    private func ensureSlotIsInVideosDirectory(_ slotURL: URL, description: String) throws {
+        let videosURL = videosDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let resolvedSlotURL = slotURL.standardizedFileURL.resolvingSymlinksInPath()
+        let videosComponents = videosURL.pathComponents
+        let slotComponents = resolvedSlotURL.pathComponents
+        guard slotComponents.count > videosComponents.count,
+              Array(slotComponents.prefix(videosComponents.count)) == videosComponents else {
+            throw LockScreenIntegrationError.incompatibleSchema(
+                "\(description) is outside the Aerials videos directory."
+            )
+        }
     }
 
     private func createBackup(slot: URL, assetID: String) throws -> URL {
