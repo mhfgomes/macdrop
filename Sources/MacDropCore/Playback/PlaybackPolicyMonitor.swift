@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import IOKit.ps
 
@@ -22,6 +23,7 @@ public final class PlaybackPolicyMonitor: ObservableObject {
     public func refreshAll() {
         refreshPowerState()
         refreshThermalState()
+        refreshFullscreenState()
     }
 
     private func installObservers() {
@@ -51,6 +53,27 @@ public final class PlaybackPolicyMonitor: ObservableObject {
                 self?.controller?.setPaused(false, reason: .systemSleep)
             }
         })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshFullscreenState() }
+        })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshFullscreenState() }
+        })
+        observers.append(center.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.refreshFullscreenState() }
+        })
     }
 
     private func refreshPowerState() {
@@ -66,5 +89,48 @@ public final class PlaybackPolicyMonitor: ObservableObject {
         guard let preferences = preferences() else { return }
         let pressured = thermalState == .serious || thermalState == .critical
         controller?.setPaused(pressured && preferences.pauseAtSeriousThermalState, reason: .thermalPressure)
+    }
+
+    private func refreshFullscreenState() {
+        guard let preferences = preferences(), preferences.pauseForFullscreenApps else {
+            controller?.setPaused(false, reason: .fullscreenApplication)
+            return
+        }
+        controller?.setPaused(frontmostApplicationHasFullscreenWindow(), reason: .fullscreenApplication)
+    }
+
+    private func frontmostApplicationHasFullscreenWindow() -> Bool {
+        guard let application = NSWorkspace.shared.frontmostApplication,
+              let windowInfo = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly, .excludeDesktopElements],
+                  kCGNullWindowID
+              ) as? [[CFString: Any]] else {
+            return false
+        }
+
+        let screenBounds = NSScreen.screens.compactMap { screen -> CGRect? in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+                return nil
+            }
+            return CGDisplayBounds(CGDirectDisplayID(number.uint32Value))
+        }
+
+        return windowInfo.contains { window in
+            guard (window[kCGWindowOwnerPID] as? NSNumber)?.int32Value == application.processIdentifier,
+                  (window[kCGWindowLayer] as? NSNumber)?.intValue == 0,
+                  let boundsDictionary = window[kCGWindowBounds] as? CFDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary) else {
+                return false
+            }
+            return screenBounds.contains { Self.approximatelyEqual(bounds, $0) }
+        }
+    }
+
+    private static func approximatelyEqual(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
+        let tolerance: CGFloat = 1
+        return abs(lhs.minX - rhs.minX) <= tolerance &&
+            abs(lhs.minY - rhs.minY) <= tolerance &&
+            abs(lhs.width - rhs.width) <= tolerance &&
+            abs(lhs.height - rhs.height) <= tolerance
     }
 }
