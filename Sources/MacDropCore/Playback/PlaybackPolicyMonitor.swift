@@ -18,6 +18,7 @@ public final class PlaybackPolicyMonitor: ObservableObject {
         installObservers()
         refreshPowerState()
         refreshThermalState()
+        refreshFullscreenState()
     }
 
     public func refreshAll() {
