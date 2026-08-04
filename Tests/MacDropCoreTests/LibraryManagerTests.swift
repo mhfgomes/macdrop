@@ -43,6 +43,33 @@ private struct FailingHEVCPreparer: LockAssetPreparing {
 
 @MainActor
 final class LibraryManagerTests: XCTestCase {
+    func testInitializationRemovesStaleImportDirectories() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let schema = Schema(MacDropSchema.models)
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let paths = AppPaths(root: root.appendingPathComponent("ApplicationSupport"))
+        try paths.prepare()
+        let staleDirectory = paths.library.appendingPathComponent(".import-stale", isDirectory: true)
+        let similarlyNamedFile = paths.library.appendingPathComponent(".import-keep")
+        try FileManager.default.createDirectory(at: staleDirectory, withIntermediateDirectories: true)
+        try Data("partial import".utf8).write(to: staleDirectory.appendingPathComponent("source.mp4"))
+        try Data("not a directory".utf8).write(to: similarlyNamedFile)
+
+        _ = try LibraryManager(
+            context: container.mainContext,
+            paths: paths,
+            inspector: FakeInspector(),
+            thumbnailGenerator: FakeThumbnailer(),
+            hevcPreparer: FakeHEVCPreparer()
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staleDirectory.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: similarlyNamedFile.path))
+    }
+
     func testImportCommitsOnlyAfterManagedFilesExist() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
