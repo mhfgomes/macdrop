@@ -28,7 +28,7 @@ struct MacDropApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("MacDrop", id: "main") {
+        Window("MacDrop", id: "main") {
             MainWindowView()
                 .environmentObject(appModel)
                 .frame(minWidth: 900, minHeight: 600)
