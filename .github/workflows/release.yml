@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: brew install xcodegen
+      - name: Generate project
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          xcodegen generate
+          echo "MACDROP_RELEASES_URL=https://github.com/$REPOSITORY/releases" >> "$GITHUB_ENV"
+      - name: Build universal release
+        run: |
+          xcodebuild build \
+            -project MacDrop.xcodeproj \
+            -scheme MacDrop \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            ARCHS='arm64 x86_64' \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            MACDROP_RELEASES_URL="$MACDROP_RELEASES_URL"
+      - name: Ad-hoc sign application
+        run: |
+          APP="$RUNNER_TEMP/DerivedData/Build/Products/Release/MacDrop.app"
+          codesign --force --sign - --timestamp=none "$APP/Contents/Frameworks/MacDropCore.framework"
+          codesign --force --sign - --timestamp=none \
+            --entitlements Resources/MacDrop.entitlements \
+            "$APP"
+          codesign --verify --deep --strict "$APP"
+          file "$APP/Contents/MacOS/MacDrop" | grep -q 'universal binary'
+      - name: Build DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          chmod +x scripts/make-dmg.sh
+          scripts/make-dmg.sh "$RUNNER_TEMP/DerivedData/Build/Products/Release/MacDrop.app" "$VERSION" dist
+          shasum -a 256 -c "dist/MacDrop-$VERSION-universal.dmg.sha256"
+          hdiutil verify "dist/MacDrop-$VERSION-universal.dmg"
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          append_body: true
+          body: |
+            This build is ad-hoc signed and does not require Apple credentials to produce.
+            On first launch, macOS may require Control-clicking MacDrop and choosing Open.
+          files: |
+            dist/*.dmg
+            dist/*.sha256
