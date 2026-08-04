@@ -36,6 +36,7 @@ final class AppModel: ObservableObject {
     private var policyMonitor: PlaybackPolicyMonitor?
     private var pendingOptimizationIDs: [UUID] = []
     private var activeOptimizationTasks: [UUID: Task<Void, Never>] = [:]
+    private var activeImportTask: Task<Void, Never>?
     private var optimizationStartedAt: [UUID: Date] = [:]
     private var userCancelledOptimizationIDs: Set<UUID> = []
     private let maxConcurrentOptimizations = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
@@ -94,11 +95,24 @@ final class AppModel: ObservableObject {
     }
 
     func importVideos(_ urls: [URL]) async {
-        guard !urls.isEmpty else { return }
+        guard !urls.isEmpty, !isDestructiveOperationBusy, activeImportTask == nil else { return }
+        let task = Task { @MainActor [weak self] in
+            await self?.performImportVideos(urls)
+        }
+        activeImportTask = task
+        await task.value
+        activeImportTask = nil
+    }
+
+    private func performImportVideos(_ urls: [URL]) async {
         isImporting = true
         importResults = []
+        defer { isImporting = false }
+
         for url in urls {
+            guard !Task.isCancelled else { return }
             let results = await library.importVideos(from: [url])
+            guard !Task.isCancelled else { return }
             importResults.append(contentsOf: results)
             let importedIDs = results.compactMap(\.wallpaperID)
             if !importedIDs.isEmpty {
@@ -106,7 +120,6 @@ final class AppModel: ObservableObject {
                 enqueueOptimizations(importedIDs)
             }
         }
-        isImporting = false
         let failures = importResults.compactMap { result in result.error.map { "\(result.sourceName): \($0)" } }
         if !failures.isEmpty {
             presentedError = (["Some videos could not be imported:"] + failures).joined(separator: "\n")
@@ -278,6 +291,7 @@ final class AppModel: ObservableObject {
     }
 
     func prepareAndInstallLockScreen(_ wallpaper: Wallpaper) async {
+        guard !isDestructiveOperationBusy else { return }
         guard !isLockScreenBusy else {
             presentedError = "A lock-screen wallpaper is already being prepared. Please wait for it to finish."
             return
@@ -681,6 +695,16 @@ final class AppModel: ObservableObject {
         optimizationProgress.removeAll()
         optimizationETA.removeAll()
         optimizationStartedAt.removeAll()
+
+        if let importTask = activeImportTask {
+            importTask.cancel()
+            await importTask.value
+            activeImportTask = nil
+        }
+
+        while isLockScreenBusy {
+            await Task.yield()
+        }
 
         let shouldRestoreLockScreen = preferences.lockScreenEnabled ||
             preferences.lockScreenWallpaperID != nil ||
