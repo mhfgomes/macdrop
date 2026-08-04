@@ -51,6 +51,7 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     private let home: URL
     private let fileManager: FileManager
     private let agentRestarter: @Sendable () throws -> Void
+    private let operationLock = NSLock()
 
     private var aerialsRoot: URL { home.appendingPathComponent("Library/Application Support/com.apple.wallpaper/aerials") }
     private var videosDirectory: URL { aerialsRoot.appendingPathComponent("videos") }
@@ -75,6 +76,9 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     }
 
     public func health() throws -> LockScreenHealth {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         guard let state = try loadState(), state.active else {
             return LockScreenHealth(state: .disabled, message: "Lock-screen integration is off.")
         }
@@ -104,6 +108,9 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     }
 
     public func install(assetURL: URL, thumbnailURL: URL, name: String) throws {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 else {
             throw LockScreenIntegrationError.unsupportedOS
         }
@@ -158,6 +165,9 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     }
 
     public func restore() throws {
+        operationLock.lock()
+        defer { operationLock.unlock() }
+
         guard let state = try loadState() else { throw LockScreenIntegrationError.noBackup }
         let backupDirectory = URL(fileURLWithPath: state.backupDirectory, isDirectory: true)
         guard fileManager.fileExists(atPath: backupDirectory.path) else { throw LockScreenIntegrationError.noBackup }
