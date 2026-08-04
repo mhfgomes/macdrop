@@ -18,7 +18,7 @@ struct MenuBarContentView: View {
                     .foregroundStyle(MacDropStyle.accent)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("MacDrop").font(.headline)
-                    Text(appModel.playback.globallyPaused ? "Paused" : "Playing")
+                    Text(menuStatus)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -79,6 +79,13 @@ struct MenuBarContentView: View {
         }
         .padding(16)
         .frame(width: 340)
+    }
+
+
+    private var menuStatus: String {
+        if appModel.playback.globallyPaused { return "Paused" }
+        if appModel.playback.activeWallpaperIDs.isEmpty { return "Idle" }
+        return "Playing"
     }
 
     private func currentName(_ assignment: DisplayAssignment?) -> String {
