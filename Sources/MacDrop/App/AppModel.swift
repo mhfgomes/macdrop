@@ -97,7 +97,8 @@ final class AppModel: ObservableObject {
     func importVideos(_ urls: [URL]) async {
         guard !urls.isEmpty, !isDestructiveOperationBusy, activeImportTask == nil else { return }
         let task = Task { @MainActor [weak self] in
-            await self?.performImportVideos(urls)
+            guard let self else { return }
+            await self.performImportVideos(urls)
         }
         activeImportTask = task
         await task.value
