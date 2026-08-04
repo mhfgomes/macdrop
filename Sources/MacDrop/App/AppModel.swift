@@ -56,14 +56,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    init(container: ModelContainer) {
+    init(container: ModelContainer) throws {
         self.context = container.mainContext
         self.paths = AppPaths()
-        do {
-            self.library = try LibraryManager(context: container.mainContext, paths: paths)
-        } catch {
-            fatalError("MacDrop library could not be initialized: \(error)")
-        }
+        self.library = try LibraryManager(context: container.mainContext, paths: paths)
         self.displays = DisplayDiscovery()
         self.playback = WallpaperPlaybackController(paths: paths)
         self.launchAtLogin = LaunchAtLoginController()
