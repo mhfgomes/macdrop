@@ -198,6 +198,7 @@ final class AppModel: ObservableObject {
         let entry = PlaylistEntry(wallpaperID: wallpaper.id, sortIndex: playlist.entries.count)
         playlist.entries.append(entry)
         try? context.save()
+        reconcileDisplaysAndAssignments()
     }
 
     func remove(_ entry: PlaylistEntry, from playlist: Playlist) {
@@ -548,11 +549,16 @@ final class AppModel: ObservableObject {
     }
 
     private func apply(assignment: DisplayAssignment, resetTimer: Bool = true) {
+        defer { try? context.save() }
+
         switch assignment.source {
         case .wallpaper(let wallpaperID):
             timers[assignment.displayUUID]?.invalidate()
             timers.removeValue(forKey: assignment.displayUUID)
-            guard let wallpaper = fetchWallpapers().first(where: { $0.id == wallpaperID }) else { return }
+            guard let wallpaper = fetchWallpapers().first(where: { $0.id == wallpaperID }) else {
+                playback.stop(on: assignment.displayUUID)
+                return
+            }
             assignment.lastWallpaperID = wallpaper.id
             playback.play(
                 wallpaper: wallpaper,
@@ -561,33 +567,46 @@ final class AppModel: ObservableObject {
                 advancesOnEnd: false
             )
         case .playlist(let playlistID):
-            guard let playlist = fetchPlaylists().first(where: { $0.id == playlistID }) else { return }
+            guard let playlist = fetchPlaylists().first(where: { $0.id == playlistID }) else {
+                stopPlayback(on: assignment.displayUUID)
+                return
+            }
             let ids = playlist.orderedEntries.map(\.wallpaperID)
-            var currentDuration: TimeInterval?
+            guard !ids.isEmpty else {
+                assignment.lastWallpaperID = nil
+                stopPlayback(on: assignment.displayUUID)
+                return
+            }
             if assignment.lastWallpaperID == nil || !ids.contains(assignment.lastWallpaperID!) {
                 assignment.lastWallpaperID = scheduler.nextID(in: ids, current: nil, order: playlist.playbackOrder)
             }
-            if let wallpaperID = assignment.lastWallpaperID,
-               let wallpaper = fetchWallpapers().first(where: { $0.id == wallpaperID }) {
-                currentDuration = wallpaper.duration
-                playback.play(
-                    wallpaper: wallpaper,
-                    on: assignment.displayUUID,
-                    contentMode: assignment.contentMode,
-                    advancesOnEnd: assignment.advanceMode == .videoEnd && ids.count > 1
-                )
+            guard let wallpaperID = assignment.lastWallpaperID,
+                  let wallpaper = fetchWallpapers().first(where: { $0.id == wallpaperID }) else {
+                stopPlayback(on: assignment.displayUUID)
+                return
             }
+            playback.play(
+                wallpaper: wallpaper,
+                on: assignment.displayUUID,
+                contentMode: assignment.contentMode,
+                advancesOnEnd: assignment.advanceMode == .videoEnd && ids.count > 1
+            )
             if assignment.advanceMode == .interval {
                 if resetTimer { scheduleTimer(for: assignment) }
             } else {
                 timers[assignment.displayUUID]?.invalidate()
                 timers.removeValue(forKey: assignment.displayUUID)
-                if ids.count > 1, let currentDuration {
-                    scheduleEndFallback(for: assignment, duration: currentDuration)
+                if ids.count > 1 {
+                    scheduleEndFallback(for: assignment, duration: wallpaper.duration)
                 }
             }
         }
-        try? context.save()
+    }
+
+    private func stopPlayback(on displayID: String) {
+        timers[displayID]?.invalidate()
+        timers.removeValue(forKey: displayID)
+        playback.stop(on: displayID)
     }
 
     private func scheduleTimer(for assignment: DisplayAssignment) {
