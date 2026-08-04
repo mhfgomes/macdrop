@@ -148,6 +148,10 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
                 installedVideoSHA256: installedHash
             )
             try atomicWriteEncodable(state, to: stateURL)
+            if persistentBackup != rollbackBackup {
+                try? fileManager.removeItem(at: rollbackBackup)
+            }
+            pruneBackups(keeping: persistentBackup)
         } catch {
             try? restoreExactBackup(from: rollbackBackup)
             try? restoreSlotBackup(from: rollbackBackup, to: slot.url)
@@ -189,6 +193,7 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
             throw LockScreenIntegrationError.verificationFailed("MacDrop's manifest entry could not be removed.")
         }
         try? fileManager.removeItem(at: stateURL)
+        pruneBackups(keeping: nil)
     }
 
     public func backupFolderURL() -> URL { appPaths.backups }
@@ -432,6 +437,37 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
             )
         }
         return slot
+    }
+
+
+    private func pruneBackups(keeping keep: URL?) {
+        let keepPath = keep?.resolvingSymlinksInPath().path
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: appPaths.backups,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let backups = contents.filter { url in
+            var isDir: ObjCBool = false
+            return fileManager.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }.sorted { lhs, rhs in
+            let l = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let r = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return l > r
+        }
+        var retained = 0
+        for backup in backups {
+            let path = backup.resolvingSymlinksInPath().path
+            if keepPath == path {
+                retained += 1
+                continue
+            }
+            if retained < 3 {
+                retained += 1
+                continue
+            }
+            try? fileManager.removeItem(at: backup)
+        }
     }
 
     private func createBackup(slot: URL, assetID: String) throws -> URL {
