@@ -37,8 +37,7 @@ struct DisplaysView: View {
                                         .fontWeight(.medium)
                                     Spacer()
                                     Button("Forget") {
-                                        appModel.context.delete(assignment)
-                                        try? appModel.context.save()
+                                        appModel.forgetAssignment(assignment)
                                     }
                                 }
                                 .padding(14)
