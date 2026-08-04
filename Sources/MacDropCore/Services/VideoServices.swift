@@ -130,6 +130,9 @@ public struct AVLockAssetPreparer: LockAssetPreparing {
             throw VideoServiceError.missingVideoTrack
         }
         let duration = try await asset.load(.duration)
+        guard duration.isNumeric, duration.seconds.isFinite, duration.seconds > 0 else {
+            throw VideoServiceError.invalidDuration
+        }
         let transform = try await sourceTrack.load(.preferredTransform)
         let composition = AVMutableComposition()
         guard let compositionTrack = composition.addMutableTrack(
