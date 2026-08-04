@@ -104,7 +104,7 @@ public final class PlaybackPolicyMonitor: ObservableObject {
               let windowInfo = CGWindowListCopyWindowInfo(
                   [.optionOnScreenOnly, .excludeDesktopElements],
                   kCGNullWindowID
-              ) as? [[CFString: Any]] else {
+              ) as? [[String: Any]] else {
             return false
         }
 
@@ -116,9 +116,9 @@ public final class PlaybackPolicyMonitor: ObservableObject {
         }
 
         return windowInfo.contains { window in
-            guard (window[kCGWindowOwnerPID] as? NSNumber)?.int32Value == application.processIdentifier,
-                  (window[kCGWindowLayer] as? NSNumber)?.intValue == 0,
-                  let boundsDictionary = window[kCGWindowBounds] as? CFDictionary,
+            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == application.processIdentifier,
+                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let boundsDictionary = window[kCGWindowBounds as String] as? CFDictionary,
                   let bounds = CGRect(dictionaryRepresentation: boundsDictionary) else {
                 return false
             }
