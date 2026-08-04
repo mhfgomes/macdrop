@@ -81,7 +81,7 @@ private final class AppLauncher: ObservableObject {
     }
 
     private var databaseFiles: [URL] {
-        let store = paths.root.appendingPathComponent("MacDrop.store")
+        let store = paths.databaseStore
         return [
             store,
             URL(fileURLWithPath: store.path + "-shm"),
@@ -98,7 +98,7 @@ private final class AppLauncher: ObservableObject {
             let configuration = ModelConfiguration(
                 "MacDrop",
                 schema: schema,
-                url: paths.root.appendingPathComponent("MacDrop.store")
+                url: paths.databaseStore
             )
             container = try ModelContainer(for: schema, configurations: [configuration])
         } catch {

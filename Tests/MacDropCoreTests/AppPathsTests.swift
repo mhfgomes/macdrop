@@ -10,5 +10,6 @@ final class AppPathsTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.library.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.backups.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: paths.logs.path))
+        XCTAssertEqual(paths.databaseStore, root.appendingPathComponent("MacDrop.store"))
     }
 }
