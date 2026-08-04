@@ -16,10 +16,7 @@ struct LibraryView: View {
 
     private let itemSpacing: CGFloat = 14.2
     private var columns: [GridItem] {
-        Array(
-            repeating: GridItem(.flexible(minimum: 230), spacing: itemSpacing),
-            count: 3
-        )
+        [GridItem(.adaptive(minimum: 200, maximum: 320), spacing: itemSpacing)]
     }
     private var filtered: [Wallpaper] {
         search.isEmpty ? wallpapers : wallpapers.filter { $0.name.localizedCaseInsensitiveContains(search) }
