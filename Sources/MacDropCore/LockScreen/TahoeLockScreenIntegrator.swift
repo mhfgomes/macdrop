@@ -138,11 +138,11 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     }
 
     public func install(assetURL: URL, thumbnailURL: URL, name: String) throws {
+        try appPaths.prepare()
+        try recoverIncompleteOperation()
         guard ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 else {
             throw LockScreenIntegrationError.unsupportedOS
         }
-        try appPaths.prepare()
-        try recoverIncompleteOperation()
         let entries = try loadEntries()
         let index = try loadIndex()
         let existingState = try loadState()
