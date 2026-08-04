@@ -27,7 +27,6 @@ final class WallpaperWindow: NSWindow {
         isReleasedWhenClosed = false
         animationBehavior = .none
         setFrame(frame, display: true)
-        orderBack(nil)
 
         occlusionObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification,
