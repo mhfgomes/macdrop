@@ -96,7 +96,9 @@ public final class Wallpaper {
         get {
             switch lockAssetState {
             case "ready": return .ready
-            case "preparing": return .preparing(progress: 0)
+            case "preparing":
+                let progress = Double(lockAssetError ?? "0").map { min(1, max(0, $0)) } ?? 0
+                return .preparing(progress: progress)
             case "cancelled": return .cancelled
             case "failed": return .failed(message: lockAssetError ?? "Unknown error")
             default: return .notPrepared
@@ -107,9 +109,9 @@ public final class Wallpaper {
             case .notPrepared:
                 lockAssetState = "notPrepared"
                 lockAssetError = nil
-            case .preparing:
+            case .preparing(let progress):
                 lockAssetState = "preparing"
-                lockAssetError = nil
+                lockAssetError = String(min(1, max(0, progress)))
             case .ready:
                 lockAssetState = "ready"
                 lockAssetError = nil
