@@ -444,9 +444,9 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
             let indexData = try Data(contentsOf: indexURL)
             try entriesData.write(to: directory.appendingPathComponent("entries.json"), options: .atomic)
             try indexData.write(to: directory.appendingPathComponent("Index.plist"), options: .atomic)
-            try Data(contentsOf: slot).write(
-                to: directory.appendingPathComponent(Self.slotBackupFilename),
-                options: .atomic
+            try atomicCopy(
+                from: slot,
+                to: directory.appendingPathComponent(Self.slotBackupFilename)
             )
             let metadata = BackupMetadata(
                 createdAt: .now,
@@ -526,7 +526,14 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
     }
 
     private func sha256(of url: URL) throws -> String {
-        SHA256.hash(data: try Data(contentsOf: url)).hexString
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+
+        var hasher = SHA256()
+        while let chunk = try file.read(upToCount: 1_048_576), !chunk.isEmpty {
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().hexString
     }
 
     private func loadState() throws -> IntegrationState? {
