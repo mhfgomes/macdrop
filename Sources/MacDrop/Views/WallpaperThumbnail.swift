@@ -7,10 +7,11 @@ struct WallpaperThumbnail: View {
     var height: CGFloat = 130
 
     @EnvironmentObject private var appModel: AppModel
+    @State private var image: NSImage?
 
     var body: some View {
         Group {
-            if let image = NSImage(contentsOf: appModel.paths.thumbnailURL(for: wallpaper)) {
+            if let image {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
@@ -25,5 +26,11 @@ struct WallpaperThumbnail: View {
         .frame(height: height)
         .clipped()
         .background(.black)
+        .task(id: wallpaper.id) {
+            let url = appModel.paths.thumbnailURL(for: wallpaper)
+            image = await Task.detached(priority: .utility) {
+                NSImage(contentsOf: url)
+            }.value
+        }
     }
 }
