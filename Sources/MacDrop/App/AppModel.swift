@@ -252,7 +252,10 @@ final class AppModel: ObservableObject {
         do {
             try library.delete(wallpaper)
             reconcileDisplaysAndAssignments()
-        } catch { presentedError = error.localizedDescription }
+        } catch {
+            context.rollback()
+            presentedError = error.localizedDescription
+        }
     }
 
     func next(on displayID: String) {
