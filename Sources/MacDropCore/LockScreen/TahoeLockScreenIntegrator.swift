@@ -178,15 +178,29 @@ public final class TahoeLockScreenIntegrator: LockScreenIntegrating, @unchecked 
         try? fileManager.removeItem(at: installedThumbnailURL)
         try agentRestarter()
 
-        let stillOwnsSelection: Bool
-        if state.borrowedAssetID == nil {
-            stillOwnsSelection = indexSelectsAsset(try loadIndex(), assetID: state.assetID)
-        } else {
-            stillOwnsSelection = false
-        }
-        guard !entriesContainsMacDropAsset(try loadEntries()), !stillOwnsSelection else {
+        guard !entriesContainsMacDropAsset(try loadEntries()) else {
             try? restoreExactBackup(from: backupDirectory)
             throw LockScreenIntegrationError.verificationFailed("MacDrop's manifest entry could not be removed.")
+        }
+        if state.borrowedAssetID == nil {
+            guard !indexSelectsAsset(try loadIndex(), assetID: state.assetID) else {
+                try? restoreExactBackup(from: backupDirectory)
+                throw LockScreenIntegrationError.verificationFailed("MacDrop's lock-screen selection could not be removed.")
+            }
+        } else if let borrowedAssetID = state.borrowedAssetID {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let metadata = try decoder.decode(
+                BackupMetadata.self,
+                from: Data(contentsOf: backupDirectory.appendingPathComponent("backup.json"))
+            )
+            let slotURL = videosDirectory.appendingPathComponent("\(borrowedAssetID).mov")
+            if let expectedHash = metadata.slotSHA256 {
+                guard fileManager.fileExists(atPath: slotURL.path),
+                      try sha256(of: slotURL) == expectedHash else {
+                    throw LockScreenIntegrationError.verificationFailed("The borrowed Aerial slot was not restored to its original video.")
+                }
+            }
         }
         try? fileManager.removeItem(at: stateURL)
     }
