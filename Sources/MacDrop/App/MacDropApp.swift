@@ -20,8 +20,10 @@ struct MacDropApp: App {
                 url: paths.root.appendingPathComponent("MacDrop.store")
             )
             let container = try ModelContainer(for: schema, configurations: [configuration])
+            let appModel = AppModel(container: container)
             self.container = container
-            _appModel = StateObject(wrappedValue: AppModel(container: container))
+            _appModel = StateObject(wrappedValue: appModel)
+            appDelegate.appModel = appModel
         } catch {
             fatalError("MacDrop could not open its local database: \(error)")
         }
@@ -55,7 +57,17 @@ struct MacDropApp: App {
 
 @MainActor
 final class MacDropAppDelegate: NSObject, NSApplicationDelegate {
+    weak var appModel: AppModel?
     private var closeObserver: NSObjectProtocol?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let appModel,
+              appModel.isLockScreenBusy || appModel.isDestructiveOperationBusy else {
+            return .terminateNow
+        }
+        appModel.presentedError = "Please wait for the current operation to finish before quitting MacDrop."
+        return .terminateCancel
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)

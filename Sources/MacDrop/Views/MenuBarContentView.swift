@@ -74,6 +74,7 @@ struct MenuBarContentView: View {
                 Button { NSApp.terminate(nil) } label: {
                     Image(systemName: "power")
                 }
+                .disabled(appModel.isLockScreenBusy || appModel.isDestructiveOperationBusy)
                 .help("Quit MacDrop")
             }
         }
