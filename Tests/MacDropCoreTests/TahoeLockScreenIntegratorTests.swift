@@ -72,6 +72,74 @@ final class TahoeLockScreenIntegratorTests: XCTestCase {
         XCTAssertEqual(try integrator.health().state, .healthy)
     }
 
+    func testInstallRejectsAerialAssetIDWithPathTraversal() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let victimURL = fixture.root.appendingPathComponent("victim.mov")
+        let victimData = Data("must-not-change".utf8)
+        try victimData.write(to: victimURL)
+
+        var entries = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixture.entriesURL)) as? [String: Any]
+        )
+        var assets = try XCTUnwrap(entries["assets"] as? [[String: Any]])
+        assets[0]["id"] = "../../../../../../victim"
+        entries["assets"] = assets
+        try JSONSerialization.data(withJSONObject: entries).write(to: fixture.entriesURL)
+
+        let integrator = TahoeLockScreenIntegrator(appPaths: fixture.appPaths, home: fixture.home, agentRestarter: {})
+        XCTAssertThrowsError(
+            try integrator.install(assetURL: fixture.videoURL, thumbnailURL: fixture.thumbnailURL, name: "Test")
+        ) { error in
+            guard let integrationError = error as? LockScreenIntegrationError,
+                  case .incompatibleSchema(let message) = integrationError else {
+                return XCTFail("Expected incompatibleSchema, got \(error)")
+            }
+            XCTAssertTrue(message.contains("canonical UUID"))
+        }
+        XCTAssertEqual(try Data(contentsOf: victimURL), victimData)
+    }
+
+    func testRestoreRejectsBorrowedSlotPathOutsideVideosDirectory() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let integrator = TahoeLockScreenIntegrator(appPaths: fixture.appPaths, home: fixture.home, agentRestarter: {})
+        try integrator.install(assetURL: fixture.videoURL, thumbnailURL: fixture.thumbnailURL, name: "Test")
+        let victimURL = fixture.root.appendingPathComponent("victim.mov")
+        let victimData = Data("must-not-change".utf8)
+        try victimData.write(to: victimURL)
+        try fixture.updateState {
+            $0.removeValue(forKey: "borrowedAssetID")
+            $0["borrowedSlotPath"] = victimURL.path
+        }
+
+        XCTAssertThrowsError(try integrator.restore()) { error in
+            guard let integrationError = error as? LockScreenIntegrationError,
+                  case .incompatibleSchema(let message) = integrationError else {
+                return XCTFail("Expected incompatibleSchema, got \(error)")
+            }
+            XCTAssertTrue(message.contains("outside the Aerials videos directory"))
+        }
+        XCTAssertEqual(try Data(contentsOf: victimURL), victimData)
+        XCTAssertEqual(try Data(contentsOf: fixture.slotURL), try Data(contentsOf: fixture.videoURL))
+    }
+
+    func testRestoreDerivesSlotPathFromBorrowedAssetID() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let integrator = TahoeLockScreenIntegrator(appPaths: fixture.appPaths, home: fixture.home, agentRestarter: {})
+        try integrator.install(assetURL: fixture.videoURL, thumbnailURL: fixture.thumbnailURL, name: "Test")
+        let victimURL = fixture.root.appendingPathComponent("victim.mov")
+        let victimData = Data("must-not-change".utf8)
+        try victimData.write(to: victimURL)
+        try fixture.updateState { $0["borrowedSlotPath"] = victimURL.path }
+
+        try integrator.restore()
+
+        XCTAssertEqual(try Data(contentsOf: victimURL), victimData)
+        XCTAssertEqual(try Data(contentsOf: fixture.slotURL), fixture.slotOriginalData)
+    }
+
     private static func provider(in selection: Any?) -> String? {
         let selection = selection as? [String: Any]
         let content = selection?["Content"] as? [String: Any]
@@ -131,4 +199,13 @@ private final class Fixture {
     }
 
     func remove() { try? FileManager.default.removeItem(at: root) }
+
+    func updateState(_ update: (inout [String: Any]) -> Void) throws {
+        let stateURL = appPaths.root.appendingPathComponent("lock-screen-state.json")
+        var state = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: stateURL)) as? [String: Any]
+        )
+        update(&state)
+        try JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]).write(to: stateURL)
+    }
 }
