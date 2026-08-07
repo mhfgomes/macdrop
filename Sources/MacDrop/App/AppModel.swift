@@ -376,7 +376,7 @@ final class AppModel: ObservableObject {
 
     func persistPreferences() {
         try? context.save()
-        playback.setOcclusionPausingEnabled(preferences.pauseWhenObscured || preferences.pauseForFullscreenApps)
+        playback.setOcclusionPausingEnabled(preferences.pauseWhenObscured)
         policyMonitor?.refreshAll()
     }
 
@@ -644,7 +644,7 @@ final class AppModel: ObservableObject {
 
     private func refreshSystemState() {
         preferences.launchAtLogin = launchAtLogin.isEnabled
-        playback.setOcclusionPausingEnabled(preferences.pauseWhenObscured || preferences.pauseForFullscreenApps)
+        playback.setOcclusionPausingEnabled(preferences.pauseWhenObscured)
         reconcileDisplaysAndAssignments()
         refreshLockHealth()
     }
@@ -727,7 +727,7 @@ final class AppModel: ObservableObject {
         try paths.prepare()
 
         playback.setPaused(false, reason: .manual)
-        playback.setOcclusionPausingEnabled(true)
+        playback.setOcclusionPausingEnabled(preferences.pauseWhenObscured)
         policyMonitor?.refreshAll()
         refreshLockHealth()
     }
