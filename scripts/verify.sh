@@ -10,7 +10,7 @@ plutil -lint Resources/Info.plist Resources/MacDrop.entitlements Resources/Expor
 python3 -m json.tool Assets.xcassets/Contents.json >/dev/null
 python3 -m json.tool Assets.xcassets/AppIcon.appiconset/Contents.json >/dev/null
 
-if command -v xcodegen >/dev/null && xcode-select -p 2>/dev/null | grep -q 'Xcode.app'; then
+if command -v xcodegen >/dev/null && command -v xcodebuild >/dev/null && xcodebuild -version >/dev/null 2>&1; then
   xcodegen generate
   xcodebuild -project MacDrop.xcodeproj -scheme MacDrop -configuration Debug test CODE_SIGNING_ALLOWED=NO
 else
