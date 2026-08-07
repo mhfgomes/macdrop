@@ -2,6 +2,7 @@ import Foundation
 
 public struct AppPaths: Sendable {
     public let root: URL
+    public let databaseStore: URL
     public let library: URL
     public let backups: URL
     public let logs: URL
@@ -10,6 +11,7 @@ public struct AppPaths: Sendable {
         let resolvedRoot = root ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MacDrop", isDirectory: true)
         self.root = resolvedRoot
+        self.databaseStore = resolvedRoot.appendingPathComponent("MacDrop.store")
         self.library = resolvedRoot.appendingPathComponent("Library", isDirectory: true)
         self.backups = resolvedRoot.appendingPathComponent("Backups/WallpaperSystem", isDirectory: true)
         self.logs = resolvedRoot.appendingPathComponent("Logs", isDirectory: true)
