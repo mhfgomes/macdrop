@@ -27,7 +27,7 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
         for id in Array(windows.keys) where screensByID[id] == nil {
             pendingOcclusionTasks[id]?.cancel()
             pendingOcclusionTasks.removeValue(forKey: id)
-            windows[id]?.orderOut(nil)
+            windows[id]?.invalidate()
             windows.removeValue(forKey: id)
             displayOccluded.remove(id)
         }
@@ -98,8 +98,7 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
         pendingOcclusionTasks.removeAll()
         displayOccluded.removeAll()
         for window in windows.values {
-            window.videoView.clear()
-            window.orderOut(nil)
+            window.invalidate()
         }
         windows.removeAll()
         activeWallpaperIDs.removeAll()
