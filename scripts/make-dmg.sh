@@ -26,6 +26,7 @@ project_dir="${script_dir:h}"
 background_path="$project_dir/Resources/DMG/background.png"
 
 if [[ ! -f "$background_path" ]]; then
+  mkdir -p "${background_path:h}"
   swift "$script_dir/generate-dmg-background.swift" "$background_path"
 fi
 
