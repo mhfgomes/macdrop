@@ -218,9 +218,13 @@ final class AppModel: ObservableObject {
     func deletePlaylist(_ playlist: Playlist) {
         let fallback = fetchWallpapers().first
         for assignment in fetchAssignments() {
-            if case .playlist(let id) = assignment.source, id == playlist.id, let fallback {
-                assignment.source = .wallpaper(fallback.id)
-                assignment.lastWallpaperID = fallback.id
+            if case .playlist(let id) = assignment.source, id == playlist.id {
+                if let fallback {
+                    assignment.source = .wallpaper(fallback.id)
+                    assignment.lastWallpaperID = fallback.id
+                } else {
+                    context.delete(assignment)
+                }
             }
         }
         context.delete(playlist)
