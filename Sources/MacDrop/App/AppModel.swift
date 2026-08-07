@@ -563,13 +563,11 @@ final class AppModel: ObservableObject {
         case .playlist(let playlistID):
             guard let playlist = fetchPlaylists().first(where: { $0.id == playlistID }) else { return }
             let ids = playlist.orderedEntries.map(\.wallpaperID)
-            var currentDuration: TimeInterval?
             if assignment.lastWallpaperID == nil || !ids.contains(assignment.lastWallpaperID!) {
                 assignment.lastWallpaperID = scheduler.nextID(in: ids, current: nil, order: playlist.playbackOrder)
             }
             if let wallpaperID = assignment.lastWallpaperID,
                let wallpaper = fetchWallpapers().first(where: { $0.id == wallpaperID }) {
-                currentDuration = wallpaper.duration
                 playback.play(
                     wallpaper: wallpaper,
                     on: assignment.displayUUID,
@@ -582,9 +580,6 @@ final class AppModel: ObservableObject {
             } else {
                 timers[assignment.displayUUID]?.invalidate()
                 timers.removeValue(forKey: assignment.displayUUID)
-                if ids.count > 1, let currentDuration {
-                    scheduleEndFallback(for: assignment, duration: currentDuration)
-                }
             }
         }
         try? context.save()
@@ -598,21 +593,6 @@ final class AppModel: ObservableObject {
             Task { @MainActor [weak self] in self?.next(on: displayID) }
         }
         timer.tolerance = min(60, interval * 0.1)
-        timers[displayID] = timer
-    }
-
-    private func scheduleEndFallback(for assignment: DisplayAssignment, duration: TimeInterval) {
-        let displayID = assignment.displayUUID
-        let interval = max(0.5, duration)
-        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard let self,
-                      let current = self.assignment(for: displayID),
-                      current.advanceMode == .videoEnd else { return }
-                self.advancePlaylist(on: displayID)
-            }
-        }
-        timer.tolerance = min(0.1, interval * 0.005)
         timers[displayID] = timer
     }
 
