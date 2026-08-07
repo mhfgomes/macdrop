@@ -99,6 +99,76 @@ final class TahoeLockScreenIntegratorTests: XCTestCase {
         XCTAssertEqual(recovered["status"] as? String, "rolledBack")
     }
 
+    func testReinstallWithDifferentAerialUsesNewPersistentBackup() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let integrator = TahoeLockScreenIntegrator(appPaths: fixture.appPaths, home: fixture.home, agentRestarter: {})
+        try integrator.install(assetURL: fixture.videoURL, thumbnailURL: fixture.thumbnailURL, name: "First")
+
+        let firstBackup = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: fixture.appPaths.backups,
+                includingPropertiesForKeys: nil
+            ).first
+        )
+        let firstSlotBackup = firstBackup.appendingPathComponent("aerial-slot.original.mov")
+        let firstSlotBackupData = try Data(contentsOf: firstSlotBackup)
+
+        let replacementAssetID = "66666666-7777-4888-8999-AAAAAAAAAAAA"
+        let replacementSlot = fixture.slotURL.deletingLastPathComponent()
+            .appendingPathComponent("\(replacementAssetID).mov")
+        let replacementOriginalData = Data("replacement-apple-aerial".utf8)
+        try replacementOriginalData.write(to: replacementSlot)
+        try FileManager.default.removeItem(at: fixture.slotURL)
+        let replacementAsset: [String: Any] = [
+            "id": replacementAssetID,
+            "categories": ["fixture.apple"],
+            "url-4K-SDR-240FPS": "https://example.invalid/replacement-aerial.mov"
+        ]
+        let replacementEntries: [String: Any] = [
+            "version": 1,
+            "categories": [],
+            "assets": [replacementAsset]
+        ]
+        try JSONSerialization.data(
+            withJSONObject: replacementEntries,
+            options: [.prettyPrinted, .sortedKeys]
+        ).write(to: fixture.entriesURL)
+
+        Thread.sleep(forTimeInterval: 0.01)
+        try integrator.install(assetURL: fixture.videoURL, thumbnailURL: fixture.thumbnailURL, name: "Second")
+
+        let state = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: fixture.appPaths.root.appendingPathComponent("lock-screen-state.json"))
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(state["borrowedAssetID"] as? String, replacementAssetID)
+        let secondBackup = URL(
+            fileURLWithPath: try XCTUnwrap(state["backupDirectory"] as? String),
+            isDirectory: true
+        )
+        XCTAssertNotEqual(secondBackup.standardizedFileURL, firstBackup.standardizedFileURL)
+
+        let firstMetadata = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: firstBackup.appendingPathComponent("backup.json"))
+            ) as? [String: Any]
+        )
+        let secondMetadata = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: Data(contentsOf: secondBackup.appendingPathComponent("backup.json"))
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(firstMetadata["borrowedAssetID"] as? String, "11111111-2222-4333-8444-555555555555")
+        XCTAssertEqual(secondMetadata["borrowedAssetID"] as? String, replacementAssetID)
+        XCTAssertEqual(try Data(contentsOf: firstSlotBackup), firstSlotBackupData)
+
+        try integrator.restore()
+        XCTAssertEqual(try Data(contentsOf: replacementSlot), replacementOriginalData)
+        XCTAssertEqual(try Data(contentsOf: firstSlotBackup), fixture.slotOriginalData)
+    }
+
     private static func provider(in selection: Any?) -> String? {
         let selection = selection as? [String: Any]
         let content = selection?["Content"] as? [String: Any]
