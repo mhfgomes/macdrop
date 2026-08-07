@@ -241,12 +241,19 @@ final class AppModel: ObservableObject {
             for (index, entry) in playlist.orderedEntries.enumerated() { entry.sortIndex = index }
         }
         let fallback = fetchWallpapers().first { $0.id != wallpaper.id }
-        for assignment in fetchAssignments() where assignment.lastWallpaperID == wallpaper.id {
-            if let fallback {
-                assignment.source = .wallpaper(fallback.id)
-                assignment.lastWallpaperID = fallback.id
-            } else {
-                context.delete(assignment)
+        for assignment in fetchAssignments() {
+            switch assignment.source {
+            case .playlist where assignment.lastWallpaperID == wallpaper.id:
+                assignment.lastWallpaperID = nil
+            case .wallpaper(let id) where id == wallpaper.id:
+                if let fallback {
+                    assignment.source = .wallpaper(fallback.id)
+                    assignment.lastWallpaperID = fallback.id
+                } else {
+                    context.delete(assignment)
+                }
+            default:
+                break
             }
         }
         do {
