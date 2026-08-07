@@ -78,7 +78,11 @@ final class AppModel: ObservableObject {
         } else {
             let preferences = AppPreferences()
             container.mainContext.insert(preferences)
-            try? container.mainContext.save()
+            do {
+                try container.mainContext.save()
+            } catch {
+                // Preferences bootstrap failure is non-fatal for launch; surface later if needed.
+            }
             self.preferences = preferences
         }
 
@@ -116,7 +120,7 @@ final class AppModel: ObservableObject {
     func retryOptimization(_ wallpaper: Wallpaper) {
         userCancelledOptimizationIDs.remove(wallpaper.id)
         wallpaper.lockAssetStatus = .notPrepared
-        try? context.save()
+        saveContext(action: "your changes")
         enqueueOptimizations([wallpaper.id])
     }
 
@@ -133,7 +137,7 @@ final class AppModel: ObservableObject {
         optimizationProgress.removeValue(forKey: id)
         optimizationETA.removeValue(forKey: id)
         wallpaper.lockAssetStatus = .cancelled
-        try? context.save()
+        saveContext(action: "your changes")
     }
 
     func openImportPanel() {
@@ -162,7 +166,7 @@ final class AppModel: ObservableObject {
             context.insert(assignment)
             assignments.append(assignment)
         }
-        try? context.save()
+        saveContext(action: "your changes")
         for assignment in assignments where displays.displays.contains(where: { $0.id == assignment.displayUUID }) {
             apply(assignment: assignment)
         }
@@ -173,7 +177,7 @@ final class AppModel: ObservableObject {
         if assignment.modelContext == nil { context.insert(assignment) }
         assignment.source = .wallpaper(wallpaper.id)
         assignment.lastWallpaperID = wallpaper.id
-        try? context.save()
+        saveContext(action: "your changes")
         apply(assignment: assignment)
     }
 
@@ -182,14 +186,14 @@ final class AppModel: ObservableObject {
         if assignment.modelContext == nil { context.insert(assignment) }
         assignment.source = .playlist(playlist.id)
         assignment.lastWallpaperID = nil
-        try? context.save()
+        saveContext(action: "your changes")
         apply(assignment: assignment)
     }
 
     func createPlaylist(name: String) -> Playlist {
         let playlist = Playlist(name: name)
         context.insert(playlist)
-        try? context.save()
+        saveContext(action: "your changes")
         return playlist
     }
 
@@ -197,14 +201,14 @@ final class AppModel: ObservableObject {
         guard !playlist.entries.contains(where: { $0.wallpaperID == wallpaper.id }) else { return }
         let entry = PlaylistEntry(wallpaperID: wallpaper.id, sortIndex: playlist.entries.count)
         playlist.entries.append(entry)
-        try? context.save()
+        saveContext(action: "your changes")
     }
 
     func remove(_ entry: PlaylistEntry, from playlist: Playlist) {
         playlist.entries.removeAll { $0.id == entry.id }
         context.delete(entry)
         for (index, remaining) in playlist.orderedEntries.enumerated() { remaining.sortIndex = index }
-        try? context.save()
+        saveContext(action: "your changes")
         reconcileDisplaysAndAssignments()
     }
 
@@ -212,7 +216,7 @@ final class AppModel: ObservableObject {
         var ordered = playlist.orderedEntries
         ordered.move(fromOffsets: source, toOffset: destination)
         for (index, entry) in ordered.enumerated() { entry.sortIndex = index }
-        try? context.save()
+        saveContext(action: "your changes")
     }
 
     func deletePlaylist(_ playlist: Playlist) {
@@ -224,7 +228,7 @@ final class AppModel: ObservableObject {
             }
         }
         context.delete(playlist)
-        try? context.save()
+        saveContext(action: "your changes")
         reconcileDisplaysAndAssignments()
     }
 
@@ -265,7 +269,7 @@ final class AppModel: ObservableObject {
               let playlist = fetchPlaylists().first(where: { $0.id == playlistID }) else { return }
         let ids = playlist.orderedEntries.map(\.wallpaperID)
         assignment.lastWallpaperID = scheduler.nextID(in: ids, current: assignment.lastWallpaperID, order: playlist.playbackOrder)
-        try? context.save()
+        saveContext(action: "your changes")
         apply(assignment: assignment, resetTimer: false)
     }
 
@@ -273,7 +277,7 @@ final class AppModel: ObservableObject {
         guard let assignment = assignment(for: displayID), case .playlist(let playlistID) = assignment.source,
               let playlist = fetchPlaylists().first(where: { $0.id == playlistID }) else { return }
         assignment.lastWallpaperID = scheduler.previousID(in: playlist.orderedEntries.map(\.wallpaperID), current: assignment.lastWallpaperID)
-        try? context.save()
+        saveContext(action: "your changes")
         apply(assignment: assignment, resetTimer: false)
     }
 
@@ -305,7 +309,7 @@ final class AppModel: ObservableObject {
                 assetURL = cached
             } else {
                 wallpaper.lockAssetStatus = .preparing(progress: 0)
-                try? context.save()
+                saveContext(action: "your changes")
                 lockScreenProgressMessage = "Optimizing \(wallpaper.name)…"
                 assetURL = try await lockPreparer.prepare(
                     sourceURL: source,
@@ -333,7 +337,7 @@ final class AppModel: ObservableObject {
             }
         } catch {
             wallpaper.lockAssetStatus = .failed(message: error.localizedDescription)
-            try? context.save()
+            saveContext(action: "your changes")
             presentedError = error.localizedDescription
         }
     }
@@ -375,7 +379,7 @@ final class AppModel: ObservableObject {
     }
 
     func persistPreferences() {
-        try? context.save()
+        saveContext(action: "your changes")
         playback.setOcclusionPausingEnabled(preferences.pauseWhenObscured || preferences.pauseForFullscreenApps)
         policyMonitor?.refreshAll()
     }
@@ -499,7 +503,7 @@ final class AppModel: ObservableObject {
         wallpaper.lockAssetStatus = .preparing(progress: 0)
         optimizationProgress[id] = 0
         optimizationStartedAt[id] = .now
-        try? context.save()
+        saveContext(action: "your changes")
 
         do {
             try await library.prepareHEVC(for: wallpaper) { [weak self] progress in
@@ -519,13 +523,13 @@ final class AppModel: ObservableObject {
             optimizationProgress.removeValue(forKey: id)
             optimizationETA.removeValue(forKey: id)
             optimizationStartedAt.removeValue(forKey: id)
-            try? context.save()
+            saveContext(action: "your changes")
         } catch {
             wallpaper.lockAssetStatus = .failed(message: error.localizedDescription)
             optimizationProgress.removeValue(forKey: id)
             optimizationETA.removeValue(forKey: id)
             optimizationStartedAt.removeValue(forKey: id)
-            try? context.save()
+            saveContext(action: "your changes")
         }
     }
 
@@ -540,6 +544,19 @@ final class AppModel: ObservableObject {
             optimizationETA[id] = previous * 0.72 + estimate * 0.28
         } else {
             optimizationETA[id] = estimate
+        }
+    }
+
+
+    @discardableResult
+    private func saveContext(action: String) -> Bool {
+        do {
+            try context.save()
+            return true
+        } catch {
+            context.rollback()
+            presentedError = "MacDrop could not save \(action): \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -587,7 +604,7 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-        try? context.save()
+        saveContext(action: "your changes")
     }
 
     private func scheduleTimer(for assignment: DisplayAssignment) {
@@ -662,7 +679,7 @@ final class AppModel: ObservableObject {
             }
             changed = true
         }
-        if changed { try? context.save() }
+        if changed { saveContext(action: "your changes") }
     }
 
     private func refreshLockHealth() {
