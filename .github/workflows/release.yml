@@ -35,11 +35,12 @@ jobs:
       - name: Ad-hoc sign application
         run: |
           APP="$RUNNER_TEMP/DerivedData/Build/Products/Release/MacDrop.app"
-          codesign --force --sign - --timestamp=none "$APP/Contents/Frameworks/MacDropCore.framework"
-          codesign --force --sign - --timestamp=none \
+          codesign --force --sign - --options runtime --timestamp=none "$APP/Contents/Frameworks/MacDropCore.framework"
+          codesign --force --sign - --options runtime --timestamp=none \
             --entitlements Resources/MacDrop.entitlements \
             "$APP"
           codesign --verify --deep --strict "$APP"
+          codesign --display --verbose=2 "$APP" 2>&1 | grep -q 'flags=.*runtime' 
           file "$APP/Contents/MacOS/MacDrop" | grep -q 'universal binary'
       - name: Build DMG
         run: |
