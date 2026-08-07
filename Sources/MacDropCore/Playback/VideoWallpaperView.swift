@@ -16,6 +16,8 @@ final class VideoWallpaperView: NSView {
     private var loops = true
     private var batteryMode = false
     private var didSignalPlaybackEnd = false
+    private var rebuildAttemptCount = 0
+    private let maxRebuildAttempts = 3
     var playbackEnded: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
@@ -44,6 +46,7 @@ final class VideoWallpaperView: NSView {
         currentURL = url
         desiredContentMode = contentMode
         self.loops = loops
+        rebuildAttemptCount = 0
         playerLayer.videoGravity = contentMode == .fill ? .resizeAspectFill : .resizeAspect
         rebuildPlayer()
     }
@@ -68,6 +71,7 @@ final class VideoWallpaperView: NSView {
 
     func clear() {
         currentURL = nil
+        rebuildAttemptCount = 0
         rebuildPlayer()
     }
 
@@ -106,7 +110,7 @@ final class VideoWallpaperView: NSView {
             playerLooper = looper
             looperObservation = looper.observe(\.status, options: [.new]) { [weak self] looper, _ in
                 guard looper.status == .failed else { return }
-                Task { @MainActor [weak self] in self?.rebuildPlayer() }
+                Task { @MainActor [weak self] in self?.handlePlaybackFailure() }
             }
         } else {
             playerLooper = nil
@@ -130,9 +134,19 @@ final class VideoWallpaperView: NSView {
         }
         itemObservation = player.observe(\.currentItem?.status, options: [.new]) { [weak self] player, _ in
             guard player.currentItem?.status == .failed else { return }
-            Task { @MainActor [weak self] in self?.rebuildPlayer() }
+            Task { @MainActor [weak self] in self?.handlePlaybackFailure() }
         }
         player.play()
+    }
+
+    private func handlePlaybackFailure() {
+        rebuildAttemptCount += 1
+        guard rebuildAttemptCount <= maxRebuildAttempts else {
+            currentURL = nil
+            rebuildPlayer()
+            return
+        }
+        rebuildPlayer()
     }
 
     private func signalPlaybackEnded() {
