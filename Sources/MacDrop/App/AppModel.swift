@@ -439,7 +439,11 @@ final class AppModel: ObservableObject {
 
     func showMainWindow(openWindow: OpenWindowAction) {
         NSApp.setActivationPolicy(.regular)
-        openWindow(id: "main")
+        if let existing = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" || $0.title == "MacDrop" }) {
+            existing.makeKeyAndOrderFront(nil)
+        } else {
+            openWindow(id: "main")
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 
