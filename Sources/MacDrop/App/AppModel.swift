@@ -56,9 +56,9 @@ final class AppModel: ObservableObject {
         }
     }
 
-    init(container: ModelContainer) {
+    init(container: ModelContainer, paths: AppPaths) {
         self.context = container.mainContext
-        self.paths = AppPaths()
+        self.paths = paths
         do {
             self.library = try LibraryManager(context: container.mainContext, paths: paths)
         } catch {

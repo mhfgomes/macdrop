@@ -21,7 +21,7 @@ struct MacDropApp: App {
             )
             let container = try ModelContainer(for: schema, configurations: [configuration])
             self.container = container
-            _appModel = StateObject(wrappedValue: AppModel(container: container))
+            _appModel = StateObject(wrappedValue: AppModel(container: container, paths: paths))
         } catch {
             fatalError("MacDrop could not open its local database: \(error)")
         }
