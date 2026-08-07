@@ -22,13 +22,12 @@ public struct DiagnosticsExporter: Sendable {
             "operatingSystem": ProcessInfo.processInfo.operatingSystemVersionString,
             "architecture": Self.architecture,
             "displayCount": displays.count,
-            "displays": displays.map { [
-                "id": String($0.id.suffix(8)),
-                "name": $0.name,
-                "width": Int($0.frame.width),
-                "height": Int($0.frame.height),
-                "scale": $0.backingScaleFactor,
-                "main": $0.isMain
+            "displays": displays.enumerated().map { index, display in [
+                "id": "display-\(index + 1)",
+                "width": Int(display.frame.width),
+                "height": Int(display.frame.height),
+                "scale": display.backingScaleFactor,
+                "main": display.isMain
             ] },
             "lockScreen": ["state": lockHealth.state.rawValue, "message": lockHealth.message]
         ]
@@ -36,8 +35,25 @@ public struct DiagnosticsExporter: Sendable {
         try data.write(to: directory.appendingPathComponent("diagnostics.json"), options: .atomic)
 
         let logDestination = directory.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: logDestination, withIntermediateDirectories: true)
         if FileManager.default.fileExists(atPath: paths.logs.path) {
-            try? FileManager.default.copyItem(at: paths.logs, to: logDestination)
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            let enumerator = FileManager.default.enumerator(at: paths.logs, includingPropertiesForKeys: nil)
+            while let item = enumerator?.nextObject() as? URL {
+                guard !item.hasDirectoryPath else { continue }
+                let relative = item.path.replacingOccurrences(of: paths.logs.path + "/", with: "")
+                let destination = logDestination.appendingPathComponent(relative)
+                try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+                let raw = (try? String(contentsOf: item, encoding: .utf8)) ?? ""
+                let redacted = raw
+                    .replacingOccurrences(of: home, with: "~")
+                    .replacingOccurrences(
+                        of: #"/Users/[^/\s]+"#,
+                        with: "~",
+                        options: .regularExpression
+                    )
+                try redacted.write(to: destination, atomically: true, encoding: .utf8)
+            }
         }
 
         let archive = FileManager.default.temporaryDirectory
