@@ -30,6 +30,7 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
             windows[id]?.orderOut(nil)
             windows.removeValue(forKey: id)
             displayOccluded.remove(id)
+            activeWallpaperIDs.removeValue(forKey: id)
         }
 
         for (id, screen) in screensByID {
