@@ -72,6 +72,33 @@ final class TahoeLockScreenIntegratorTests: XCTestCase {
         XCTAssertEqual(try integrator.health().state, .healthy)
     }
 
+    func testHealthRollsBackInterruptedInstallJournal() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let originalEntries = try Data(contentsOf: fixture.entriesURL)
+        let originalIndex = try Data(contentsOf: fixture.indexURL)
+        let integrator = TahoeLockScreenIntegrator(appPaths: fixture.appPaths, home: fixture.home, agentRestarter: {})
+        try integrator.install(assetURL: fixture.videoURL, thumbnailURL: fixture.thumbnailURL, name: "Test")
+
+        let journalURL = fixture.appPaths.root.appendingPathComponent("lock-screen-operation-journal.json")
+        var journal = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: journalURL)) as? [String: Any]
+        )
+        journal["status"] = "inProgress"
+        try JSONSerialization.data(withJSONObject: journal, options: [.prettyPrinted, .sortedKeys])
+            .write(to: journalURL, options: .atomic)
+
+        XCTAssertEqual(try integrator.health().state, .disabled)
+        XCTAssertEqual(try Data(contentsOf: fixture.entriesURL), originalEntries)
+        XCTAssertEqual(try Data(contentsOf: fixture.indexURL), originalIndex)
+        XCTAssertEqual(try Data(contentsOf: fixture.slotURL), fixture.slotOriginalData)
+
+        let recovered = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: journalURL)) as? [String: Any]
+        )
+        XCTAssertEqual(recovered["status"] as? String, "rolledBack")
+    }
+
     private static func provider(in selection: Any?) -> String? {
         let selection = selection as? [String: Any]
         let content = selection?["Content"] as? [String: Any]
