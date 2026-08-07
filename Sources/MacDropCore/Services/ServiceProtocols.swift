@@ -54,6 +54,7 @@ public protocol WallpaperPlaybackControlling: AnyObject {
         contentMode: WallpaperContentMode,
         advancesOnEnd: Bool
     )
+    func stop(on displayID: String)
     func setPaused(_ paused: Bool, reason: PlaybackPauseReason)
     func setBatteryMode(_ enabled: Bool)
 }

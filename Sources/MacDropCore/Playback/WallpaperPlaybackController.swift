@@ -64,8 +64,18 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
         let playbackURL = optimizedURL.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
             ?? paths.sourceURL(for: wallpaper)
         window.videoView.load(url: playbackURL, contentMode: contentMode, loops: !advancesOnEnd)
+        window.orderBack(nil)
         activeWallpaperIDs[displayID] = wallpaper.id
         applyPlaybackState()
+    }
+
+    public func stop(on displayID: String) {
+        pendingOcclusionTasks[displayID]?.cancel()
+        pendingOcclusionTasks.removeValue(forKey: displayID)
+        displayOccluded.remove(displayID)
+        windows[displayID]?.videoView.clear()
+        windows[displayID]?.orderOut(nil)
+        activeWallpaperIDs.removeValue(forKey: displayID)
     }
 
     public func setPaused(_ paused: Bool, reason: PlaybackPauseReason) {
