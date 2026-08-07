@@ -270,6 +270,7 @@ final class AppModel: ObservableObject {
     }
 
     func previous(on displayID: String) {
+        guard !playback.globallyPaused else { return }
         guard let assignment = assignment(for: displayID), case .playlist(let playlistID) = assignment.source,
               let playlist = fetchPlaylists().first(where: { $0.id == playlistID }) else { return }
         assignment.lastWallpaperID = scheduler.previousID(in: playlist.orderedEntries.map(\.wallpaperID), current: assignment.lastWallpaperID)
