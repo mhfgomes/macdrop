@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
     private var optimizationStartedAt: [UUID: Date] = [:]
     private var userCancelledOptimizationIDs: Set<UUID> = []
     private let maxConcurrentOptimizations = min(4, max(2, ProcessInfo.processInfo.activeProcessorCount / 2))
+    private var nestedObservationCancellables = Set<AnyCancellable>()
 
     enum SidebarSection: String, CaseIterable, Identifiable {
         case library = "Library"
@@ -88,6 +89,18 @@ final class AppModel: ObservableObject {
 
         recoverInterruptedLockPreparationState()
         self.policyMonitor = PlaybackPolicyMonitor(controller: playback) { [weak self] in self?.preferences }
+        displays.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &nestedObservationCancellables)
+        playback.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &nestedObservationCancellables)
+        policyMonitor?.objectWillChange
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &nestedObservationCancellables)
         installObservers()
         refreshSystemState()
         Task { @MainActor [weak self] in self?.resumePendingOptimizations() }
@@ -382,7 +395,6 @@ final class AppModel: ObservableObject {
 
     func toggleManualPause() {
         playback.toggleManualPause()
-        objectWillChange.send()
     }
 
     func exportDiagnostics() async {
