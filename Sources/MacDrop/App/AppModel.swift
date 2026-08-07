@@ -150,6 +150,11 @@ final class AppModel: ObservableObject {
     func reconcileDisplaysAndAssignments() {
         displays.refresh()
         playback.reconcileDisplays()
+        let connectedIDs = Set(displays.displays.map(\.id))
+        for displayID in Array(timers.keys) where !connectedIDs.contains(displayID) {
+            timers[displayID]?.invalidate()
+            timers.removeValue(forKey: displayID)
+        }
         let wallpapers = fetchWallpapers()
         guard let first = wallpapers.first else { return }
         var assignments = fetchAssignments()
@@ -163,9 +168,17 @@ final class AppModel: ObservableObject {
             assignments.append(assignment)
         }
         try? context.save()
-        for assignment in assignments where displays.displays.contains(where: { $0.id == assignment.displayUUID }) {
+        for assignment in assignments where connectedIDs.contains(assignment.displayUUID) {
             apply(assignment: assignment)
         }
+    }
+
+    func forgetAssignment(_ assignment: DisplayAssignment) {
+        let displayID = assignment.displayUUID
+        timers[displayID]?.invalidate()
+        timers.removeValue(forKey: displayID)
+        context.delete(assignment)
+        try? context.save()
     }
 
     func assign(_ wallpaper: Wallpaper, to displayID: String) {
