@@ -41,8 +41,7 @@ public struct DiagnosticsExporter: Sendable {
         }
 
         let archive = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MacDrop-Diagnostics-\(Self.timestamp).zip")
-        try? FileManager.default.removeItem(at: archive)
+            .appendingPathComponent("MacDrop-Diagnostics-\(Self.timestamp)-\(UUID().uuidString).zip")
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
         process.arguments = ["-c", "-k", "--sequesterRsrc", directory.path, archive.path]
