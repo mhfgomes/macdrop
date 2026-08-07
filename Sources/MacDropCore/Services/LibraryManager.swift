@@ -1,6 +1,17 @@
 import Foundation
 import SwiftData
 
+public enum LibraryManagerError: LocalizedError {
+    case deleteSaveAndRestoreFailed(saveFailure: String, restoreFailure: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .deleteSaveAndRestoreFailed(let saveFailure, let restoreFailure):
+            "Deleting the wallpaper could not be saved (\(saveFailure)), and restoring its files from Trash also failed (\(restoreFailure))."
+        }
+    }
+}
+
 @MainActor
 public final class LibraryManager: ObservableObject, LibraryManaging {
     public let paths: AppPaths
@@ -22,6 +33,7 @@ public final class LibraryManager: ObservableObject, LibraryManaging {
         self.thumbnailGenerator = thumbnailGenerator
         self.hevcPreparer = hevcPreparer
         try paths.prepare()
+        try removeStaleImportDirectories()
     }
 
     public func importVideos(from urls: [URL]) async -> [VideoImportResult] {
@@ -88,6 +100,8 @@ public final class LibraryManager: ObservableObject, LibraryManaging {
         for wallpaper: Wallpaper,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
+        let previousLockAssetFilename = wallpaper.lockAssetFilename
+        let previousLockAssetStatus = wallpaper.lockAssetStatus
         let source = paths.sourceURL(for: wallpaper)
         let destination = paths.directory(for: wallpaper.id).appendingPathComponent("lock-hevc.mov")
         let metadata = VideoMetadata(
@@ -106,7 +120,17 @@ public final class LibraryManager: ObservableObject, LibraryManaging {
         )
         wallpaper.lockAssetFilename = prepared.lastPathComponent
         wallpaper.lockAssetStatus = .ready
-        try context.save()
+        do {
+            try context.save()
+        } catch {
+            wallpaper.lockAssetFilename = previousLockAssetFilename
+            wallpaper.lockAssetStatus = previousLockAssetStatus
+            if prepared.standardizedFileURL == destination.standardizedFileURL,
+               previousLockAssetFilename != destination.lastPathComponent {
+                try? FileManager.default.removeItem(at: destination)
+            }
+            throw error
+        }
     }
 
     public func delete(_ wallpaper: Wallpaper) throws {
@@ -121,9 +145,28 @@ public final class LibraryManager: ObservableObject, LibraryManaging {
         } catch {
             context.rollback()
             if let trashedURL, !FileManager.default.fileExists(atPath: directory.path) {
-                try? FileManager.default.moveItem(at: trashedURL as URL, to: directory)
+                do {
+                    try FileManager.default.moveItem(at: trashedURL as URL, to: directory)
+                } catch let restoreError {
+                    throw LibraryManagerError.deleteSaveAndRestoreFailed(
+                        saveFailure: error.localizedDescription,
+                        restoreFailure: restoreError.localizedDescription
+                    )
+                }
             }
             throw error
+        }
+    }
+
+    private func removeStaleImportDirectories() throws {
+        let fileManager = FileManager.default
+        let contents = try fileManager.contentsOfDirectory(
+            at: paths.library,
+            includingPropertiesForKeys: [.isDirectoryKey]
+        )
+        for url in contents where url.lastPathComponent.hasPrefix(".import-") {
+            guard try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true else { continue }
+            try fileManager.removeItem(at: url)
         }
     }
 }
