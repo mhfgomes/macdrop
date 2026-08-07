@@ -27,8 +27,10 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
         for id in Array(windows.keys) where screensByID[id] == nil {
             pendingOcclusionTasks[id]?.cancel()
             pendingOcclusionTasks.removeValue(forKey: id)
+            windows[id]?.videoView.clear()
             windows[id]?.orderOut(nil)
             windows.removeValue(forKey: id)
+            activeWallpaperIDs.removeValue(forKey: id)
             displayOccluded.remove(id)
         }
 
@@ -36,7 +38,11 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
             if let window = windows[id] {
                 window.setFrame(screen.frame, display: true)
                 window.videoView.setBatteryMode(batteryMode)
-                window.orderBack(nil)
+                if activeWallpaperIDs[id] == nil {
+                    window.orderOut(nil)
+                } else {
+                    window.orderBack(nil)
+                }
             } else {
                 let window = WallpaperWindow(displayID: id, frame: screen.frame)
                 window.visibilityChanged = { [weak self] visible in
@@ -47,7 +53,7 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
                 }
                 windows[id] = window
                 window.videoView.setBatteryMode(batteryMode)
-                window.orderBack(nil)
+                window.orderOut(nil)
             }
         }
         applyPlaybackState()
@@ -65,6 +71,7 @@ public final class WallpaperPlaybackController: ObservableObject, WallpaperPlayb
             ?? paths.sourceURL(for: wallpaper)
         window.videoView.load(url: playbackURL, contentMode: contentMode, loops: !advancesOnEnd)
         activeWallpaperIDs[displayID] = wallpaper.id
+        window.orderBack(nil)
         applyPlaybackState()
     }
 
